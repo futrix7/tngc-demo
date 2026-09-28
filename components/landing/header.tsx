@@ -3,7 +3,10 @@
 import { useState, useEffect } from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { Menu, Phone, Sun, Moon, Monitor, LogIn, UserPlus } from "lucide-react"
+import {
+  Menu, Phone, Sun, Moon, Monitor,
+  LogIn, Sparkles, GraduationCap, ChevronRight,
+} from "lucide-react"
 import { useTheme } from "@/components/theme-provider"
 import { buttonVariants } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -15,121 +18,147 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet"
 
-const landingLinks = [
-  { label: "Courses", href: "/courses" },
-  { label: "Staff", href: "/#staff" },
+const navLinks = [
+  { label: "Courses", href: "/#courses" },
+  { label: "Staff",   href: "/#staff"   },
   { label: "Address", href: "/#address" },
   { label: "Contact", href: "/#contact" },
 ]
 
-const coursesLinks = [
-  { label: "Home", href: "/" },
-  { label: "Staff", href: "/#staff" },
-  { label: "Address", href: "/#address" },
-  { label: "Contact", href: "/#contact" },
-]
-
-function ThemeToggle({ overlay }: { overlay: boolean }) {
+/* ─── Theme toggle ───────────────────────────────────────────────── */
+function ThemeToggle({ white }: { white: boolean }) {
   const { theme, setTheme } = useTheme()
   const [mounted, setMounted] = useState(false)
-
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => setMounted(true), [])
 
-  if (!mounted) {
-    return (
-      <button className="inline-flex size-8 items-center justify-center rounded-lg border border-border text-muted-foreground">
-        <Monitor className="size-4" />
-      </button>
-    )
-  }
-
   return (
     <button
-      onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-      className={cn(
-        "inline-flex size-8 items-center justify-center rounded-lg transition-colors",
-        overlay
-          ? "border border-white/20 text-white/70 hover:bg-white/10 hover:text-white"
-          : "border border-border text-muted-foreground hover:bg-muted hover:text-foreground"
-      )}
+      onClick={() => mounted && setTheme(theme === "dark" ? "light" : "dark")}
       aria-label="Toggle theme"
+      className={cn(
+        "inline-flex h-10 w-10 items-center justify-center rounded-xl border transition-all duration-300 active:scale-95",
+        white
+          ? "border-white/30 text-white/80 hover:bg-white/15 hover:border-white/50 hover:text-white"
+          : "border-border bg-background text-muted-foreground hover:border-primary/40 hover:bg-primary/8 hover:text-primary"
+      )}
     >
-      {theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
+      {!mounted
+        ? <Monitor className="size-5" />
+        : theme === "dark"
+          ? <Sun className="size-5" />
+          : <Moon className="size-5" />
+      }
     </button>
   )
 }
 
+/* ─── Header ─────────────────────────────────────────────────────── */
 export function Header() {
-  const pathname = usePathname()
-  const isCoursesPage = pathname.startsWith("/courses")
-  const navLinks = isCoursesPage ? coursesLinks : landingLinks
-
+  const pathname  = usePathname()
+  const isHome    = pathname === "/"
   const [scrolled, setScrolled] = useState(false)
 
   useEffect(() => {
-    const onScroll = () => setScrolled(window.scrollY > 10)
-    onScroll()
+    const onScroll = () => setScrolled(window.scrollY > 60)
     window.addEventListener("scroll", onScroll, { passive: true })
     return () => window.removeEventListener("scroll", onScroll)
   }, [])
 
-  // Transparent/white-text style only applies over the home hero.
-  // Everywhere else (courses, terms, privacy, or after scrolling) use the solid style.
-  const overlay = pathname === "/" && !scrolled
-  const solid = !overlay
-
+  // transparent = over the dark hero, only on home before scrolling
+  const white = isHome && !scrolled
   const isActive = (href: string) => !href.includes("#") && href === pathname
 
   return (
     <header
-      className={cn(
-        "fixed top-0 left-0 right-0 z-50 border transition-all duration-300",
-        solid
-          ? "mx-2 mt-2 rounded-2xl border-border/50 bg-background/80 shadow-xl backdrop-blur-xl sm:mx-auto sm:mt-3 sm:w-[95%] sm:max-w-5xl lg:max-w-6xl"
-          : "mx-4 mt-4 border-transparent bg-transparent sm:mx-auto sm:mt-6 sm:w-[95%] sm:max-w-7xl sm:rounded-b-2xl"
-      )}
+      /**
+       * Strategy: always `fixed`, always full-width.
+       * We animate individual CSS properties (background, border-color,
+       * box-shadow, padding) so the browser can interpolate smoothly.
+       * No class-swap on background — that can't animate.
+       */
+      style={{
+        backgroundColor: scrolled || !isHome
+          ? "color-mix(in oklch, var(--background) 88%, transparent)"
+          : "transparent",
+        borderBottomColor: scrolled || !isHome
+          ? "color-mix(in oklch, var(--border) 60%, transparent)"
+          : "transparent",
+        backdropFilter: scrolled || !isHome ? "blur(20px) saturate(1.4)" : "none",
+        WebkitBackdropFilter: scrolled || !isHome ? "blur(20px) saturate(1.4)" : "none",
+        boxShadow: scrolled || !isHome
+          ? "0 4px 32px rgba(0,0,0,0.10)"
+          : "none",
+      }}
+      className="fixed inset-x-0 top-0 z-50 border-b"
+      /* All the animated properties use a single transition declaration */
+      data-scrolled={scrolled ? "true" : "false"}
     >
-      <div className="flex h-14 items-center justify-between px-4 sm:h-16 sm:px-6 lg:px-8">
-        <Link href="/" className="flex items-center gap-2 group">
-          <div className="flex size-8 items-center justify-center rounded-lg bg-primary px-1 py-0.5 text-primary-foreground text-[10px] font-extrabold sm:size-9">
+      {/* Inline style for the transition — avoids Tailwind purging the arbitrary value */}
+      <style>{`
+        header[data-scrolled] {
+          transition:
+            background-color 400ms cubic-bezier(0.4, 0, 0.2, 1),
+            border-bottom-color 400ms cubic-bezier(0.4, 0, 0.2, 1),
+            box-shadow 400ms cubic-bezier(0.4, 0, 0.2, 1),
+            backdrop-filter 400ms cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        header[data-scrolled] .header-accent {
+          transition: opacity 400ms cubic-bezier(0.4, 0, 0.2, 1);
+        }
+      `}</style>
+
+      {/* Rainbow accent bar — fades in when solid */}
+      <div
+        className="header-accent h-[3px] w-full bg-gradient-to-r from-indigo-500 via-violet-500 to-pink-500"
+        style={{ opacity: scrolled || !isHome ? 1 : 0 }}
+      />
+
+      <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3 sm:px-6 sm:py-3.5 lg:px-8">
+
+        {/* ── Logo ─────────────────────────────────────────────── */}
+        <Link href="/" className="group flex shrink-0 items-center gap-3">
+          <div className={cn(
+            "flex h-11 w-11 items-center justify-center rounded-xl text-xs font-extrabold tracking-tight shadow-lg",
+            "transition-all duration-300 group-hover:scale-105",
+            white
+              ? "bg-white text-indigo-700 shadow-white/20"
+              : "bg-primary text-primary-foreground shadow-primary/25"
+          )}>
             TNGC
           </div>
-          <div className="hidden sm:block">
-            <p
-              className={cn(
-                "text-sm font-bold leading-tight",
-                overlay ? "text-white" : "text-foreground"
-              )}
-            >
+          <div>
+            <p className={cn(
+              "text-[15px] font-extrabold leading-none tracking-tight transition-colors duration-300",
+              white ? "text-white" : "text-foreground"
+            )}>
               The New Generation
             </p>
-            <p
-              className={cn(
-                "text-[10px] leading-tight",
-                overlay ? "text-white/70" : "text-muted-foreground"
-              )}
-            >
-              Computers
+            <p className={cn(
+              "mt-0.5 text-[11px] font-medium transition-colors duration-300",
+              white ? "text-white/55" : "text-muted-foreground"
+            )}>
+              Computers · Hyderabad
             </p>
           </div>
         </Link>
 
-        {/* Desktop nav */}
+        {/* ── Desktop nav (lg+) ─────────────────────────────────── */}
         <nav className="hidden items-center gap-0.5 lg:flex">
           {navLinks.map((link) => (
             <Link
               key={link.href}
               href={link.href}
               className={cn(
-                "rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-                overlay
+                "rounded-xl px-4 py-2.5 text-[15px] font-semibold",
+                "transition-all duration-200",
+                white
                   ? isActive(link.href)
-                    ? "text-white bg-white/10"
-                    : "text-white/80 hover:bg-white/10 hover:text-white"
+                    ? "bg-white/15 text-white"
+                    : "text-white/75 hover:bg-white/12 hover:text-white"
                   : isActive(link.href)
-                    ? "bg-muted text-foreground"
-                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                    ? "bg-primary/10 text-primary"
+                    : "text-foreground/70 hover:bg-primary/8 hover:text-primary"
               )}
             >
               {link.label}
@@ -137,102 +166,166 @@ export function Header() {
           ))}
         </nav>
 
-        {/* Desktop actions */}
-        <div className="hidden items-center gap-2 lg:flex">
-          <ThemeToggle overlay={overlay} />
+        {/* ── Desktop CTA (lg+) ─────────────────────────────────── */}
+        <div className="hidden items-center gap-3 lg:flex">
+          <ThemeToggle white={white} />
+
           <Link
             href="/auth/user/login"
             className={cn(
-              buttonVariants({ variant: "ghost", size: "sm" }),
-              "gap-1.5 text-sm",
-              overlay
-                ? "text-white/80 hover:text-white hover:bg-white/10"
-                : "text-muted-foreground hover:text-foreground"
+              "inline-flex h-11 items-center gap-2 rounded-xl px-6 text-[15px] font-semibold",
+              "transition-all duration-200 hover:scale-[1.03]",
+              white
+                ? "border border-white/35 text-white hover:bg-white/12 hover:border-white/55"
+                : cn(buttonVariants({ variant: "outline" }), "h-11 px-6")
             )}
           >
-            <LogIn className="size-3.5" />
+            <LogIn className="size-4" />
             Login
           </Link>
+
           <Link
             href="/auth/user/register"
             className={cn(
-              buttonVariants({ size: "sm" }),
-              "gap-1.5 text-sm",
-              overlay && "bg-white text-black hover:bg-white/90"
+              "inline-flex h-11 items-center gap-2 rounded-xl px-7 text-[15px] font-bold shadow-xl",
+              "transition-all duration-200 hover:scale-[1.04]",
+              white
+                ? "bg-white text-indigo-700 shadow-white/15 hover:bg-white/92"
+                : cn(buttonVariants(), "h-11 px-7 shadow-primary/25")
             )}
           >
-            <UserPlus className="size-3.5" />
-            Register
+            <Sparkles className="size-4" />
+            Register Free
           </Link>
         </div>
 
-        {/* Mobile actions */}
-        <div className="flex items-center gap-1.5 lg:hidden">
-          <ThemeToggle overlay={overlay} />
+        {/* ── Tablet nav (md–lg) ────────────────────────────────── */}
+        <nav className="hidden items-center gap-0.5 md:flex lg:hidden">
+          {navLinks.map((link) => (
+            <Link
+              key={link.href}
+              href={link.href}
+              className={cn(
+                "rounded-xl px-3.5 py-2 text-sm font-semibold transition-all duration-200",
+                white
+                  ? "text-white/80 hover:bg-white/12 hover:text-white"
+                  : "text-foreground/70 hover:bg-primary/8 hover:text-primary"
+              )}
+            >
+              {link.label}
+            </Link>
+          ))}
+        </nav>
+
+        {/* ── Mobile / tablet right ─────────────────────────────── */}
+        <div className="flex items-center gap-2.5 lg:hidden">
+          <ThemeToggle white={white} />
+
+          <Link
+            href="/auth/user/register"
+            className={cn(
+              "hidden sm:inline-flex h-10 items-center gap-2 rounded-xl px-5 text-sm font-bold",
+              "shadow-lg transition-all duration-200 hover:scale-[1.04]",
+              white
+                ? "bg-white text-indigo-700 shadow-white/15 hover:bg-white/92"
+                : cn(buttonVariants(), "h-10 px-5 shadow-primary/20")
+            )}
+          >
+            <Sparkles className="size-4" />
+            Register
+          </Link>
+
+          {/* Hamburger */}
           <Sheet>
             <SheetTrigger
-              className={cn(
-                "inline-flex size-8 items-center justify-center rounded-lg transition-colors",
-                overlay
-                  ? "text-white hover:bg-white/10"
-                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
-              )}
               aria-label="Open menu"
+              className={cn(
+                "inline-flex h-10 w-10 items-center justify-center rounded-xl border",
+                "transition-all duration-200 active:scale-95",
+                white
+                  ? "border-white/30 text-white hover:bg-white/12 hover:border-white/50"
+                  : "border-border text-foreground hover:bg-primary/8 hover:border-primary/30 hover:text-primary"
+              )}
             >
               <Menu className="size-5" />
             </SheetTrigger>
+
             <SheetContent
               side="right"
               showCloseButton={false}
-              className="w-[min(280px,calc(100vw-2rem))] p-0"
+              className="flex w-full max-w-[300px] flex-col p-0 sm:max-w-sm"
             >
-              <SheetHeader className="border-b border-border px-4 py-3">
-                <SheetTitle className="flex items-center gap-2">
-                  <div className="flex size-7 items-center justify-center rounded-lg bg-primary px-1 py-0.5 text-primary-foreground text-[10px] font-bold">
-                    TNGC
+              <div className="h-1 w-full shrink-0 bg-gradient-to-r from-indigo-500 via-violet-500 to-pink-500" />
+
+              <SheetHeader className="shrink-0 border-b border-border px-5 py-5">
+                <SheetTitle>
+                  <div className="flex items-center gap-3">
+                    <Link href="/" className="flex items-center gap-3">
+                      <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary text-primary-foreground text-xs font-extrabold shadow-md shadow-primary/25">
+                        TNGC
+                      </div>
+                      <div>
+                        <p className="text-base font-extrabold leading-tight text-foreground">
+                          The New Generation
+                        </p>
+                        <p className="text-[11px] text-muted-foreground">Computers · Hyderabad</p>
+                      </div>
+                    </Link>
                   </div>
-                  Menu
                 </SheetTitle>
               </SheetHeader>
 
-              <nav className="flex-1 overflow-y-auto px-3 py-3">
+              <nav className="flex-1 overflow-y-auto px-3 py-4">
+                <p className="mb-1 px-4 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                  Navigation
+                </p>
                 {navLinks.map((link) => (
                   <Link
                     key={link.href}
                     href={link.href}
                     className={cn(
-                      "block rounded-lg px-3 py-2.5 text-sm font-medium transition-colors hover:bg-muted hover:text-foreground",
-                      isActive(link.href)
-                        ? "bg-muted text-foreground"
-                        : "text-muted-foreground"
+                      "flex items-center gap-3 rounded-xl px-4 py-3.5 text-base font-semibold",
+                      "transition-all duration-150 hover:bg-primary/8 hover:text-primary",
+                      isActive(link.href) ? "bg-primary/10 text-primary" : "text-foreground/80"
                     )}
                   >
+                    <GraduationCap className="size-4 shrink-0 text-primary/50" />
                     {link.label}
+                    <ChevronRight className="ml-auto size-3.5 text-muted-foreground/40" />
                   </Link>
                 ))}
               </nav>
 
-              <div className="mt-auto border-t border-border px-4 py-4 space-y-2.5">
+              <div className="shrink-0 space-y-3 border-t border-border px-4 py-5">
                 <a
                   href="tel:8143248778"
-                  className={cn(buttonVariants({ variant: "outline", size: "sm" }), "w-full justify-center gap-2")}
+                  className={cn(
+                    buttonVariants({ variant: "outline" }),
+                    "h-12 w-full justify-center gap-2 rounded-xl text-base font-semibold"
+                  )}
                 >
-                  <Phone className="size-3.5" />
-                  8143248778
+                  <Phone className="size-5" />
+                  Call: 8143248778
                 </a>
-                <div className="flex gap-2">
+                <div className="grid grid-cols-2 gap-3">
                   <Link
                     href="/auth/user/login"
-                    className={cn(buttonVariants({ variant: "outline", size: "sm" }), "flex-1 inline-flex items-center justify-center gap-1.5")}
+                    className={cn(
+                      buttonVariants({ variant: "outline" }),
+                      "h-12 justify-center gap-2 rounded-xl text-base font-semibold"
+                    )}
                   >
-                    <LogIn className="size-3.5" />
+                    <LogIn className="size-5" />
                     Login
                   </Link>
                   <Link
                     href="/auth/user/register"
-                    className={cn(buttonVariants({ size: "sm" }), "flex-1 inline-flex items-center justify-center gap-1.5")}
+                    className={cn(
+                      buttonVariants(),
+                      "h-12 justify-center gap-2 rounded-xl text-base font-bold shadow-lg shadow-primary/20"
+                    )}
                   >
-                    <UserPlus className="size-3.5" />
+                    <Sparkles className="size-5" />
                     Register
                   </Link>
                 </div>
@@ -240,6 +333,7 @@ export function Header() {
             </SheetContent>
           </Sheet>
         </div>
+
       </div>
     </header>
   )

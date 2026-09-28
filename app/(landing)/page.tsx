@@ -7,7 +7,6 @@ import { FullStackSpotlight } from "@/components/landing/fullstack-spotlight"
 import { InfoSections } from "@/components/landing/info-sections"
 import { Staff } from "@/components/landing/staff"
 import { Address } from "@/components/landing/address"
-import { Branches } from "@/components/landing/branches"
 import { ContactCTA } from "@/components/landing/contact-cta"
 
 export default function LandingPage() {
@@ -22,7 +21,6 @@ export default function LandingPage() {
       <InfoSections />
       <Staff />
       <Address />
-      <Branches />
       <ContactCTA />
     </>
   )

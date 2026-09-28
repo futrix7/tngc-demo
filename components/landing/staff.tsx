@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { motion } from "framer-motion"
-import { Award, GraduationCap, User } from "lucide-react"
+import { Award, GraduationCap, Quote } from "lucide-react"
 import { supabase } from "@/lib/supabase"
 
 const fallbackFaculty = [
@@ -64,15 +64,6 @@ interface FacultyRow {
   is_founder: boolean
 }
 
-/**
- * A person is identified by name and role together.
- *
- * `name` alone is not enough: two trainers can share it. Used to collapse repeat
- * rows, because `faculty` has no unique key and an unguarded seed appends a fresh
- * copy of the whole team on every run of supabase.sql. The migration now
- * de-duplicates the table, but a page that renders one card per row should not
- * depend on that having been applied to be correct.
- */
 function facultyIdentity(row: FacultyRow): string {
   return `${row.name}::${row.role}`
 }
@@ -80,25 +71,58 @@ function facultyIdentity(row: FacultyRow): string {
 function uniqueFaculty(rows: FacultyRow[]): FacultyRow[] {
   const seen = new Set<string>()
   const kept: FacultyRow[] = []
-
   for (const row of rows) {
     const identity = facultyIdentity(row)
     if (seen.has(identity)) continue
     seen.add(identity)
     kept.push(row)
   }
-
   return kept
 }
 
-const containerVariants = {
-  hidden: {},
-  visible: { transition: { staggerChildren: 0.1 } },
+/** Deterministic gradient per person based on their name */
+function avatarGradient(name: string): string {
+  const gradients = [
+    "from-cyan-500 to-blue-600",
+    "from-violet-500 to-purple-700",
+    "from-emerald-500 to-teal-600",
+    "from-amber-500 to-orange-600",
+    "from-rose-500 to-pink-600",
+    "from-sky-500 to-indigo-600",
+  ]
+  let hash = 0
+  for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) | 0
+  return gradients[Math.abs(hash) % gradients.length]
 }
 
-const cardVariants = {
-  hidden: { opacity: 0, y: 20 },
-  visible: { opacity: 1, y: 0, transition: { duration: 0.4 } },
+function AvatarInitials({ name, size = "lg" }: { name: string; size?: "lg" | "sm" }) {
+  const initials = name
+    .split(" ")
+    .filter(Boolean)
+    .map((w) => w[0])
+    .slice(0, 2)
+    .join("")
+    .toUpperCase()
+
+  const grad = avatarGradient(name)
+
+  if (size === "lg") {
+    return (
+      <div
+        className={`flex size-24 items-center justify-center rounded-3xl bg-gradient-to-br ${grad} text-3xl font-black text-white shadow-xl ring-4 ring-white/10 sm:size-28`}
+      >
+        {initials}
+      </div>
+    )
+  }
+
+  return (
+    <div
+      className={`flex size-14 items-center justify-center rounded-2xl bg-gradient-to-br ${grad} text-lg font-black text-white shadow-lg ring-2 ring-white/10`}
+    >
+      {initials}
+    </div>
+  )
 }
 
 export function Staff() {
@@ -118,17 +142,7 @@ export function Staff() {
 
         if (!active) return
 
-        if (error) {
-          console.error("[landing] faculty lookup failed:", error.message)
-          applyFallback()
-          return
-        }
-
-        if (!data || data.length === 0) {
-          // Not the same fault as a failed query, and worth saying so: the page
-          // is about to render the hardcoded team, which looks correct and is not
-          // what the database holds.
-          console.error("[landing] faculty returned no rows — falling back to the hardcoded team.")
+        if (error || !data || data.length === 0) {
           applyFallback()
           return
         }
@@ -149,86 +163,86 @@ export function Staff() {
     }
 
     fetchFaculty()
-    return () => {
-      active = false
-    }
+    return () => { active = false }
   }, [])
 
   return (
-    <section id="staff" className="py-16 sm:py-24 bg-muted/20">
+    <section id="staff" className="bg-slate-950 py-20 text-white sm:py-28">
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-        <div className="text-center">
-          <motion.span
+
+        {/* Header */}
+        <div className="mx-auto max-w-xl text-center">
+          <motion.p
             initial={{ opacity: 0, y: 10 }}
             whileInView={{ opacity: 1, y: 0 }}
             viewport={{ once: true }}
-            className="text-xs font-semibold uppercase tracking-widest text-primary sm:text-sm"
+            className="text-xs font-bold uppercase tracking-[0.22em] text-indigo-400"
           >
-            Meet Our Team
-          </motion.span>
+            Meet the team
+          </motion.p>
           <motion.h2
-            initial={{ opacity: 0, y: 10 }}
+            initial={{ opacity: 0, y: 12 }}
             whileInView={{ opacity: 1, y: 0 }}
             viewport={{ once: true }}
-            transition={{ delay: 0.08 }}
-            className="mt-2 text-2xl font-extrabold tracking-tight text-foreground sm:text-3xl lg:text-4xl"
+            transition={{ delay: 0.1 }}
+            className="mt-3 text-3xl font-black tracking-tight text-white sm:text-4xl"
           >
-            About the Founder & Our Faculty
+            The people behind your success
           </motion.h2>
         </div>
 
         {loading ? (
-          <div className="mt-10 sm:mt-12 space-y-8">
-            <div className="mx-auto max-w-5xl h-72 animate-pulse rounded-2xl border border-border/60 bg-muted/50" />
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-4">
+          <div className="mt-14 space-y-6">
+            <div className="h-64 animate-pulse rounded-3xl bg-white/5" />
+            <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
               {Array.from({ length: 4 }).map((_, i) => (
-                <div key={i} className="h-32 animate-pulse rounded-2xl border border-border/60 bg-muted/50" />
+                <div key={i} className="h-40 animate-pulse rounded-3xl bg-white/5" />
               ))}
             </div>
           </div>
         ) : (
-          <motion.div
-            variants={containerVariants}
-            initial="hidden"
-            whileInView="visible"
-            viewport={{ once: true, margin: "-60px" }}
-            className="mt-10 sm:mt-12"
-          >
+          <div className="mt-14">
+            {/* Director spotlight */}
             {director && (
               <motion.div
-                variants={cardVariants}
-                className="mx-auto mb-8 max-w-5xl overflow-hidden rounded-2xl border border-primary/20 bg-card ring-1 ring-primary/10"
+                initial={{ opacity: 0, y: 24 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true }}
+                transition={{ duration: 0.6 }}
+                className="relative mb-8 overflow-hidden rounded-3xl border border-white/10 bg-gradient-to-br from-slate-900 to-slate-800"
               >
-                <div className="flex flex-col md:flex-row">
-                  <div className="relative flex items-center justify-center bg-gradient-to-b from-primary/8 via-primary/5 to-primary/10 md:w-56 lg:w-64 min-h-[320px] md:min-h-[400px]">
-                    <div className="flex size-28 items-center justify-center rounded-full bg-primary/10 text-primary ring-4 ring-primary/10 sm:size-32 lg:size-36">
-                      <User className="size-14 sm:size-16" />
-                    </div>
-                    <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-gradient-to-r from-primary via-primary/80 to-primary/40" />
+                {/* decorative bg image */}
+                <div className="absolute inset-0">
+                  <div
+                    className="absolute inset-0 bg-cover bg-center opacity-10"
+                    style={{
+                      backgroundImage:
+                        "url('https://images.unsplash.com/photo-1531482615713-2afd69097998?auto=format&fit=crop&w=1200&q=60')",
+                    }}
+                  />
+                  <div className="absolute inset-0 bg-gradient-to-r from-slate-900/95 via-slate-900/80 to-transparent" />
+                </div>
+
+                <div className="relative flex flex-col gap-8 p-8 sm:flex-row sm:items-center sm:p-10 lg:p-12">
+                  <div className="shrink-0">
+                    <AvatarInitials name={director.name} size="lg" />
                   </div>
 
-                  <div className="flex-1 p-6 sm:p-8 lg:p-10">
-                    <div className="flex items-center gap-2">
-                      <div className="flex size-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                        <Award className="size-5" />
-                      </div>
-                      <span className="text-[10px] font-bold uppercase tracking-widest text-primary sm:text-xs">
-                        {director.role}
-                      </span>
+                  <div className="flex-1">
+                    <div className="inline-flex items-center gap-2 rounded-full border border-amber-400/30 bg-amber-400/10 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.18em] text-amber-300">
+                      <Award className="size-3.5" />
+                      {director.role}
                     </div>
-
-                    <h3 className="mt-4 text-2xl font-extrabold text-foreground sm:text-3xl">
-                      {director.name}
-                    </h3>
+                    <h3 className="mt-3 text-3xl font-black text-white sm:text-4xl">{director.name}</h3>
 
                     {director.qualifications?.length > 0 && (
                       <div className="mt-4 flex flex-wrap gap-2">
                         {director.qualifications.map((q, i) => (
                           <span
                             key={`${q}-${i}`}
-                            className="inline-flex items-center gap-1.5 rounded-lg bg-muted px-3 py-1.5 text-[11px] font-semibold text-muted-foreground sm:text-xs"
+                            className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-semibold text-slate-300"
                           >
-                            <GraduationCap className="size-3.5 text-primary" />
+                            <GraduationCap className="size-3.5 text-indigo-400" />
                             {q}
                           </span>
                         ))}
@@ -236,54 +250,53 @@ export function Staff() {
                     )}
 
                     {director.description && (
-                      <p className="mt-5 text-sm leading-relaxed text-muted-foreground sm:text-base">
-                        {director.description}
-                      </p>
+                      <div className="mt-5 flex gap-3">
+                        <Quote className="mt-0.5 size-5 shrink-0 text-indigo-400/50" />
+                        <p className="text-sm leading-relaxed text-slate-300 sm:text-base">
+                          {director.description}
+                        </p>
+                      </div>
                     )}
                   </div>
                 </div>
               </motion.div>
             )}
 
+            {/* Team grid */}
             {members.length > 0 && (
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-4">
-                {members.map((member) => (
+              <div className="grid grid-cols-2 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                {members.map((member, i) => (
                   <motion.div
                     key={member.id}
-                    variants={cardVariants}
-                    className="group rounded-2xl border border-border/60 bg-card p-4 transition-all duration-200 hover:border-primary/15 hover:shadow-sm sm:p-5"
+                    initial={{ opacity: 0, y: 20 }}
+                    whileInView={{ opacity: 1, y: 0 }}
+                    viewport={{ once: true, margin: "-30px" }}
+                    transition={{ delay: i * 0.08 }}
+                    className="group relative overflow-hidden rounded-3xl border border-white/10 bg-slate-900/80 p-6 transition-all duration-300 hover:-translate-y-1 hover:border-white/20 hover:shadow-xl"
                   >
-                    <div className="flex size-10 items-center justify-center rounded-xl bg-muted text-muted-foreground transition-colors group-hover:bg-primary/10 group-hover:text-primary sm:size-11">
-                      <User className="size-5" />
-                    </div>
-                    <h3 className="mt-3 text-sm font-bold text-foreground sm:text-base">
-                      {member.name}
-                    </h3>
-                    <p className="mt-0.5 text-xs font-semibold text-primary sm:text-sm">
-                      {member.role}
-                    </p>
+                    <AvatarInitials name={member.name} size="sm" />
+                    <h4 className="mt-4 text-base font-bold text-white">{member.name}</h4>
+                    <p className="mt-0.5 text-sm font-semibold text-indigo-400">{member.role}</p>
                     {member.branch && (
-                      <p className="mt-1 text-[11px] text-muted-foreground sm:text-xs">
-                        {member.branch}
-                      </p>
+                      <p className="mt-1 text-xs text-slate-500">{member.branch}</p>
                     )}
                     {member.qualifications?.length > 0 && (
-                      <p className="mt-2 flex flex-wrap gap-1">
-                        {member.qualifications.map((q, i) => (
+                      <div className="mt-3 flex flex-wrap gap-1.5">
+                        {member.qualifications.map((q, j) => (
                           <span
-                            key={`${q}-${i}`}
-                            className="rounded-md bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground"
+                            key={`${q}-${j}`}
+                            className="rounded-lg border border-white/8 bg-white/5 px-2 py-0.5 text-[10px] font-medium text-slate-400"
                           >
                             {q}
                           </span>
                         ))}
-                      </p>
+                      </div>
                     )}
                   </motion.div>
                 ))}
               </div>
             )}
-          </motion.div>
+          </div>
         )}
       </div>
     </section>
