@@ -423,7 +423,14 @@ export default function InstallmentsPage() {
       inst.studentName.toLowerCase().includes(search.toLowerCase()) ||
       inst.studentId.toLowerCase().includes(search.toLowerCase()) ||
       inst.course.toLowerCase().includes(search.toLowerCase())
-    const matchesFilter = filter === "all" || inst.status.toLowerCase() === filter
+
+    const matchesFilter =
+      filter === "all" ||
+      (filter === "paid" && inst.status === "Paid") ||
+      (filter === "pending" && inst.status === "Pending") ||
+      (filter === "partial" && inst.status === "Partial") ||
+      (filter === "confirm" && inst.pendingPaymentIds.length > 0)
+
     return matchesSearch && matchesFilter
   })
 
@@ -492,6 +499,7 @@ export default function InstallmentsPage() {
               <TabsTrigger value="paid">Paid</TabsTrigger>
               <TabsTrigger value="pending">Pending</TabsTrigger>
               <TabsTrigger value="partial">Partial</TabsTrigger>
+              <TabsTrigger value="confirm">Confirm</TabsTrigger>
             </TabsList>
           </Tabs>
 

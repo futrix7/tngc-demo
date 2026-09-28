@@ -1,21 +1,21 @@
 export const CHART_COLORS = {
-  primary: "#10b981",
-  emerald: "#10b981",
+  primary: "#22c55e",
+  emerald: "#22c55e",
   violet: "#8b5cf6",
   sky: "#0ea5e9",
   amber: "#f59e0b",
-  rose: "#f43f5e",
-  indigo: "#6366f1",
-  slate: "#94a3b8",
+  rose: "#ef4444",
+  indigo: "#4f46e5",
+  slate: "#64748b",
 }
 
 export const CHART_PALETTE = [
-  "#10b981",
-  "#8b5cf6",
+  "#22c55e",
   "#0ea5e9",
+  "#8b5cf6",
   "#f59e0b",
-  "#f43f5e",
-  "#6366f1",
+  "#ef4444",
+  "#4f46e5",
 ]
 
 export const tooltipStyle: React.CSSProperties = {

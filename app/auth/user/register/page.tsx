@@ -769,7 +769,7 @@ export default function UserRegisterPage() {
                               <Label htmlFor="fullName">Full Name *</Label>
                               <div className="relative">
                                 <User className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-                                <Input id="fullName" placeholder="e.g. Rahul Sharma" className="h-10 pl-10" value={fullName} onChange={(e) => setFullName(e.target.value)} required />
+                                <Input id="fullName" placeholder="Enter full name" className="h-10 pl-10" value={fullName} onChange={(e) => setFullName(e.target.value)} required />
                               </div>
                             </div>
 
@@ -777,7 +777,7 @@ export default function UserRegisterPage() {
                               <Label htmlFor="fatherName">Father&apos;s / Husband&apos;s Name *</Label>
                               <div className="relative">
                                 <User className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-                                <Input id="fatherName" placeholder="e.g. Suresh Sharma" className="h-10 pl-10" value={fatherName} onChange={(e) => setFatherName(e.target.value)} required />
+                                <Input id="fatherName" placeholder="Enter father’s / husband’s name" className="h-10 pl-10" value={fatherName} onChange={(e) => setFatherName(e.target.value)} required />
                               </div>
                             </div>
 
@@ -786,14 +786,14 @@ export default function UserRegisterPage() {
                                 <Label htmlFor="email">Email Address *</Label>
                                 <div className="relative">
                                   <Mail className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-                                  <Input id="email" type="email" placeholder="you@example.com" className="h-10 pl-10" value={email} onChange={(e) => setEmail(e.target.value)} required />
+                                  <Input id="email" type="email" placeholder="Enter email address" className="h-10 pl-10" value={email} onChange={(e) => setEmail(e.target.value)} required />
                                 </div>
                               </div>
                               <div className="space-y-2">
                                 <Label htmlFor="phone">Mobile Number *</Label>
                                 <div className="relative">
                                   <Phone className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-                                  <Input id="phone" type="tel" inputMode="numeric" maxLength={10} placeholder="98765 43210" className="h-10 pl-10" value={phone} onChange={(e) => setPhone(e.target.value.replace(/\D/g, "").slice(0, 10))} required />
+                                  <Input id="phone" type="tel" inputMode="numeric" maxLength={10} placeholder="Enter mobile number" className="h-10 pl-10" value={phone} onChange={(e) => setPhone(e.target.value.replace(/\D/g, "").slice(0, 10))} required />
                                 </div>
                               </div>
                             </div>
@@ -824,7 +824,7 @@ export default function UserRegisterPage() {
                                     <MapPin className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground z-10" />
                                     <Select value={branch} onValueChange={(v) => setBranch(v ?? "")}>
                                       <SelectTrigger className="pl-10">
-                                        <SelectValue placeholder="Select your nearest branch" />
+                                        <SelectValue placeholder="Enter branch" />
                                       </SelectTrigger>
                                       <SelectContent>
                                         {branchOptions.map((b) => (
@@ -1048,7 +1048,7 @@ export default function UserRegisterPage() {
                                             max={totalFee}
                                             step="0.01"
                                             inputMode="decimal"
-                                            placeholder={`Up to ₹${totalFee.toLocaleString("en-IN")}`}
+                                            placeholder="Enter amount"
                                             className="h-10 pl-10"
                                             value={customPaymentAmount}
                                             onChange={(event) => {
@@ -1112,7 +1112,7 @@ export default function UserRegisterPage() {
                                     <Hash className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                                     <Input
                                       id="paymentReference"
-                                      placeholder="Enter the transaction ID"
+                                      placeholder="Enter transaction ID"
                                       className="h-10 pl-10"
                                       value={paymentReference}
                                       onChange={(e) => setPaymentReference(e.target.value)}
@@ -1206,7 +1206,7 @@ export default function UserRegisterPage() {
                               <Label htmlFor="parentMobile">Parent&apos;s Mobile Number *</Label>
                               <div className="relative">
                                 <Phone className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-                                <Input id="parentMobile" type="tel" inputMode="numeric" maxLength={10} placeholder="98765 43210" className="h-10 pl-10" value={parentMobile} onChange={(e) => setParentMobile(e.target.value.replace(/\D/g, "").slice(0, 10))} required />
+                                <Input id="parentMobile" type="tel" inputMode="numeric" maxLength={10} placeholder="Enter parent mobile number" className="h-10 pl-10" value={parentMobile} onChange={(e) => setParentMobile(e.target.value.replace(/\D/g, "").slice(0, 10))} required />
                               </div>
                             </div>
 
@@ -1218,7 +1218,7 @@ export default function UserRegisterPage() {
                                   id="password"
                                   type={passwordVisible ? "text" : "password"}
                                   autoComplete="new-password"
-                                  placeholder="Create a password"
+                                  placeholder="Enter password"
                                   aria-describedby="password-requirements"
                                   aria-invalid={Boolean(passwordIssue)}
                                   className={cn(
@@ -1273,7 +1273,7 @@ export default function UserRegisterPage() {
                               <Label htmlFor="signature">Type your full name as signature *</Label>
                               <Input
                                 id="signature"
-                                placeholder="Type your full name"
+                                placeholder="Enter your full name"
                                 className="h-10"
                                 value={signature}
                                 onChange={(e) => setSignature(e.target.value)}

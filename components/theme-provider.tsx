@@ -30,12 +30,13 @@ function applyTheme(resolved: "light" | "dark") {
 }
 
 function getInitialTheme(): Theme {
-  if (typeof window === "undefined") return "system"
-  return (localStorage.getItem("theme") as Theme) || "system"
+  if (typeof window === "undefined") return "light"
+  const saved = localStorage.getItem("theme") as Theme | null
+  return saved === "dark" || saved === "light" ? saved : "light"
 }
 
 function getInitialResolved(theme: Theme): "light" | "dark" {
-  return theme === "system" ? getSystemTheme() : theme
+  return theme === "system" ? "light" : theme
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {

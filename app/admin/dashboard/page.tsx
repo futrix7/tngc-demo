@@ -6,7 +6,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
-import { Users, BookOpen, ClipboardCheck, UserPlus, TrendingUp, Clock, MapPin, AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
+import { Users, BookOpen, ClipboardCheck, UserPlus, TrendingUp, MapPin, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/lib/supabase";
 import { tooltipStyle, axisStyle, gridStyle, CHART_PALETTE } from "@/lib/chart-theme";
@@ -15,19 +15,6 @@ const statusVariant: Record<string, "default" | "secondary" | "destructive" | "o
   confirmed: "default",
   pending: "secondary",
   waitlisted: "outline",
-};
-
-const eventColors: Record<string, string> = {
-  orientation: "bg-blue-500/10 text-blue-500",
-  workshop: "bg-violet-500/10 text-violet-500",
-  "field-trip": "bg-emerald-500/10 text-emerald-500",
-  exam: "bg-amber-500/10 text-amber-500",
-};
-
-const priorityBadge: Record<string, "destructive" | "secondary" | "outline"> = {
-  high: "destructive",
-  medium: "secondary",
-  low: "outline",
 };
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -81,8 +68,6 @@ export default function AdminDashboardPage() {
   >([]);
   const [branchRevenue, setBranchRevenue] = useState<{ branch: string; revenue: number }[]>([]);
   const [weeklyAttendance, setWeeklyAttendance] = useState<{ day: string; rate: number }[]>([]);
-  const [upcomingEvents, setUpcomingEvents] = useState<{ event: string; date: string; type: string }[]>([]);
-  const [pendingTasks, setPendingTasks] = useState<{ task: string; priority: string }[]>([]);
 
   async function fetchDashboardData() {
     try {
@@ -91,21 +76,11 @@ export default function AdminDashboardPage() {
       const thisMonth = now.getMonth();
       const thisYear = now.getFullYear();
 
-      const [
-        studentsRes,
-        coursesRes,
-        attendanceRes,
-        paymentsRes,
-        eventsRes,
-        tasksRes,
-        branchesRes,
-      ] = await Promise.all([
+      const [studentsRes, coursesRes, attendanceRes, paymentsRes, branchesRes] = await Promise.all([
         supabase.from("students").select("id, full_name, course_slug, branch_id, enrollment_date, status"),
         supabase.from("courses").select("id, slug, name, created_at, status"),
         supabase.from("attendance").select("id, student_id, date, status"),
         supabase.from("payments").select("id, student_id, amount, status"),
-        supabase.from("events").select("id, name, date, type").order("date"),
-        supabase.from("pending_tasks").select("id, task, priority, completed").eq("completed", false),
         supabase.from("branches").select("id, name"),
       ]);
 
@@ -113,8 +88,6 @@ export default function AdminDashboardPage() {
       const courses = getSafeRows(coursesRes, "courses");
       const attendance = getSafeRows(attendanceRes, "attendance");
       const payments = getSafeRows(paymentsRes, "payments");
-      const events = getSafeRows(eventsRes, "events");
-      const tasks = getSafeRows(tasksRes, "pending_tasks");
       const branches = getSafeRows(branchesRes, "branches");
 
       const branchMap = new Map(branches.map((b) => [b.id, b.name]));
@@ -240,19 +213,6 @@ export default function AdminDashboardPage() {
       });
       setWeeklyAttendance(weeklyData);
 
-      // --- Upcoming Events ---
-      const upcomingEvts = events
-        .filter((e) => new Date(e.date) >= now)
-        .slice(0, 4)
-        .map((e) => ({
-          event: e.name,
-          date: formatDate(e.date),
-          type: e.type,
-        }));
-      setUpcomingEvents(upcomingEvts);
-
-      // --- Pending Tasks ---
-      setPendingTasks(tasks.map((t) => ({ task: t.task, priority: t.priority })));
     } catch (error) {
       console.error("Error fetching dashboard data:", error);
     } finally {
@@ -436,37 +396,6 @@ export default function AdminDashboardPage() {
           </CardContent>
         </Card>
 
-        {/* Upcoming Events */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Clock className="h-4 w-4" />
-              Upcoming Events
-            </CardTitle>
-            <CardDescription className="text-xs">Next scheduled activities</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {upcomingEvents.length === 0 ? (
-              <div className="flex h-[120px] items-center justify-center text-sm text-muted-foreground">
-                No upcoming events
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {upcomingEvents.map((event) => (
-                  <div key={`${event.event}-${event.date}`} className="flex items-center gap-3">
-                    <div className={cn("rounded-md px-2 py-1 text-xs font-medium", eventColors[event.type])}>
-                      {event.type}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">{event.event}</p>
-                      <p className="text-xs text-muted-foreground">{event.date}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
@@ -543,37 +472,6 @@ export default function AdminDashboardPage() {
           </CardContent>
         </Card>
 
-        {/* Pending Tasks */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <AlertCircle className="h-4 w-4" />
-              Pending Tasks
-            </CardTitle>
-            <CardDescription className="text-xs">Items requiring attention</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {pendingTasks.length === 0 ? (
-              <div className="flex h-[120px] items-center justify-center text-sm text-muted-foreground">
-                No pending tasks
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {pendingTasks.map((task) => (
-                  <div key={task.task} className="flex items-start gap-3">
-                    <CheckCircle2 className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm">{task.task}</p>
-                      <Badge variant={priorityBadge[task.priority]} className="mt-1 text-xs">
-                        {task.priority}
-                      </Badge>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
       </div>
     </div>
   );

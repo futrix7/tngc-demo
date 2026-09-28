@@ -122,6 +122,7 @@ export default function AdminFinancePage() {
   const [allTransactions, setAllTransactions] = useState<RecentTransaction[]>([]);
   const [showAllTxns, setShowAllTxns] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [isInProfit, setIsInProfit] = useState(true);
 
   const handleVerify = useCallback(async () => {
     setLoading(true);
@@ -222,6 +223,8 @@ export default function AdminFinancePage() {
       const totalExpenses = expenseTransactions.reduce((sum, t) => sum + Number(t.amount), 0);
       const netProfit = totalIncome - totalExpenses;
       const profitMargin = totalIncome > 0 ? Math.round((netProfit / totalIncome) * 100) : 0;
+      const profitStatus = netProfit >= 0;
+      setIsInProfit(profitStatus);
 
       setSummaryCards([
         {
@@ -230,8 +233,8 @@ export default function AdminFinancePage() {
           icon: IndianRupee,
           change: "",
           trend: "up",
-          color: "text-emerald-500",
-          bgColor: "bg-emerald-500/10",
+          color: profitStatus ? "text-emerald-500" : "text-red-500",
+          bgColor: profitStatus ? "bg-emerald-500/10" : "bg-red-500/10",
         },
         {
           title: "Total Expenses",
@@ -248,8 +251,8 @@ export default function AdminFinancePage() {
           icon: Wallet,
           change: "",
           trend: "up",
-          color: "text-blue-500",
-          bgColor: "bg-blue-500/10",
+          color: profitStatus ? "text-emerald-500" : "text-red-500",
+          bgColor: profitStatus ? "bg-emerald-500/10" : "bg-red-500/10",
         },
         {
           title: "Profit Margin",
@@ -257,8 +260,8 @@ export default function AdminFinancePage() {
           icon: PiggyBank,
           change: "",
           trend: "up",
-          color: "text-violet-500",
-          bgColor: "bg-violet-500/10",
+          color: profitStatus ? "text-emerald-500" : "text-red-500",
+          bgColor: profitStatus ? "bg-emerald-500/10" : "bg-red-500/10",
         },
       ]);
 
@@ -380,6 +383,9 @@ export default function AdminFinancePage() {
       active = false;
     };
   }, [authenticated, refreshKey]);
+
+  const revenueAccent = isInProfit ? "#22c55e" : "#ef4444";
+  const expenseAccent = "#ef4444";
 
   return (
     <div className="space-y-6">
@@ -521,12 +527,12 @@ export default function AdminFinancePage() {
                     <AreaChart data={monthlyData}>
                       <defs>
                         <linearGradient id="colorRevenue" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
-                          <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
+                          <stop offset="5%" stopColor={revenueAccent} stopOpacity={0.3} />
+                          <stop offset="95%" stopColor={revenueAccent} stopOpacity={0} />
                         </linearGradient>
                         <linearGradient id="colorExpenses" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor={CHART_PALETTE[4]} stopOpacity={0.3} />
-                          <stop offset="95%" stopColor={CHART_PALETTE[4]} stopOpacity={0} />
+                          <stop offset="5%" stopColor={expenseAccent} stopOpacity={0.3} />
+                          <stop offset="95%" stopColor={expenseAccent} stopOpacity={0} />
                         </linearGradient>
                       </defs>
                       <CartesianGrid {...gridStyle} />
@@ -546,7 +552,7 @@ export default function AdminFinancePage() {
                       <Area
                         type="monotone"
                         dataKey="revenue"
-                        stroke="#10b981"
+                        stroke={revenueAccent}
                         strokeWidth={2}
                         fillOpacity={1}
                         fill="url(#colorRevenue)"
@@ -555,7 +561,7 @@ export default function AdminFinancePage() {
                       <Area
                         type="monotone"
                         dataKey="expenses"
-                        stroke={CHART_PALETTE[4]}
+                        stroke={expenseAccent}
                         strokeWidth={2}
                         fillOpacity={1}
                         fill="url(#colorExpenses)"
