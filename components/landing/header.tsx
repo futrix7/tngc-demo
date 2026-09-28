@@ -269,7 +269,7 @@ export function Header() {
                           The New Generation
                         </p>
                         <p className="text-[11px] text-muted-foreground">Computers · Hyderabad</p>
-                      </div>
+                      </div> 
                     </Link>
                   </div>
                 </SheetTitle>
