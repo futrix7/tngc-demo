@@ -1,5 +1,6 @@
 "use client"
 
+import { usePathname } from "next/navigation"
 import { Toaster as SonnerToaster, toast as sonnerToast } from "sonner"
 
 type ToastOptions = {
@@ -41,24 +42,29 @@ function useToast() {
 }
 
 function ToastProvider({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname()
+  const isAuthRoute = pathname?.startsWith("/auth/") ?? false
+
   return (
     <>
       {children}
-      <SonnerToaster
-        position="bottom-right"
-        theme="system"
-        closeButton
-        duration={4000}
-        offset={16}
-        toastOptions={{
-          style: {
-            background: "var(--card)",
-            color: "var(--card-foreground)",
-            border: "1px solid var(--border)",
-            borderRadius: "0.75rem",
-          },
-        }}
-      />
+      {!isAuthRoute && (
+        <SonnerToaster
+          position="bottom-right"
+          theme="system"
+          closeButton
+          duration={4000}
+          offset={16}
+          toastOptions={{
+            style: {
+              background: "var(--card)",
+              color: "var(--card-foreground)",
+              border: "1px solid var(--border)",
+              borderRadius: "0.75rem",
+            },
+          }}
+        />
+      )}
     </>
   )
 }

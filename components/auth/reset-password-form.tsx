@@ -107,8 +107,8 @@ export function ResetPasswordForm({ role }: { role: AuthRole }) {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-linear-to-br from-background via-background to-muted/50 px-4 py-12">
-      <Card className="w-full max-w-md">
+    <div className="flex min-h-screen items-center justify-center bg-linear-to-br from-background via-background to-muted/50 px-3 py-8 sm:px-4 sm:py-12">
+      <Card className="w-full max-w-md sm:max-w-lg">
         <CardHeader className="text-center">
           <div className="mx-auto mb-4 flex size-14 items-center justify-center rounded-2xl bg-primary/10">
             <GraduationCap className="size-7 text-primary" />

@@ -656,8 +656,8 @@ export default function UserRegisterPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-linear-to-br from-background via-background to-muted/30 px-4 py-8">
-      <div className="w-full max-w-4xl">
+    <div className="flex min-h-screen items-center justify-center bg-linear-to-br from-background via-background to-muted/30 px-3 py-6 sm:px-4 sm:py-8">
+      <div className="w-full max-w-4xl overflow-x-hidden">
         <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm ring-1 ring-foreground/5">
           <div className="flex items-center gap-3 border-b border-border bg-muted/20 px-4 py-3 lg:px-6">
             <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary/10">
@@ -744,9 +744,9 @@ export default function UserRegisterPage() {
                 </div>
               </div>
 
-              <div className="flex flex-1 flex-col px-4 py-5 sm:px-6 lg:px-8 lg:py-6">
-                <form onSubmit={handleSubmit} noValidate className="flex flex-1 flex-col">
-                  <div className="flex-1 overflow-hidden">
+              <div className="flex flex-1 min-w-0 flex-col px-4 py-5 sm:px-6 lg:px-8 lg:py-6">
+                <form onSubmit={handleSubmit} noValidate className="flex min-w-0 flex-1 flex-col">
+                  <div className="flex-1 min-w-0 overflow-hidden">
                     <AnimatePresence mode="wait" custom={direction}>
                       <motion.div
                         key={`step-${step}`}
