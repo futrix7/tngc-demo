@@ -193,6 +193,7 @@ export default function UserRegisterPage() {
   const [direction, setDirection] = useState(1)
   const [submitting, setSubmitting] = useState(false)
   const [alreadyRegistered, setAlreadyRegistered] = useState(false)
+  const [showRegistrationIssues, setShowRegistrationIssues] = useState(false)
   const [submissionError, setSubmissionError] = useState<string | null>(null)
 
   const [fullName, setFullName] = useState("")
@@ -508,6 +509,9 @@ export default function UserRegisterPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
 
+    if (submitting) return
+
+    setShowRegistrationIssues(true)
     setSubmissionError(null)
     if (registrationIssues.length > 0) {
       toast("Please fix the items shown below before creating your account.", {
@@ -1297,7 +1301,8 @@ export default function UserRegisterPage() {
                     </AnimatePresence>
                   </div>
 
-                  {step === totalSteps && (registrationIssues.length > 0 || submissionError) && (
+                  {step === totalSteps &&
+                    (submissionError || (showRegistrationIssues && registrationIssues.length > 0)) && (
                     <div
                       role="alert"
                       className="mt-4 rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive"
@@ -1348,7 +1353,6 @@ export default function UserRegisterPage() {
                       <Button
                         type="submit"
                         className="gap-1.5 px-6"
-                        disabled={submitting}
                       >
                         {submitting ? (
                           <>
