@@ -193,6 +193,7 @@ export default function UserRegisterPage() {
   const [direction, setDirection] = useState(1)
   const [submitting, setSubmitting] = useState(false)
   const [alreadyRegistered, setAlreadyRegistered] = useState(false)
+  const [submissionError, setSubmissionError] = useState<string | null>(null)
 
   const [fullName, setFullName] = useState("")
   const [email, setEmail] = useState("")
@@ -269,6 +270,35 @@ export default function UserRegisterPage() {
   const amountToPay = paymentMode === "custom"
     ? validCustomPaymentAmount ? parsedCustomPaymentAmount : 0
     : paidInstallments.reduce((sum, n) => sum + installmentShare(n), 0)
+
+  const passwordIssue = password ? passwordProblem(password) : null
+  const registrationIssues = [
+    catalogueLoading ? "Wait for the course and branch list to finish loading." : null,
+    catalogueError,
+    !fullName.trim() ? "Enter your full name in Personal Info." : null,
+    !fatherName.trim() ? "Enter your father's or husband's name in Personal Info." : null,
+    !EMAIL_PATTERN.test(email.trim()) ? "Enter a valid email address in Personal Info." : null,
+    phone.length !== 10 ? "Enter a valid 10-digit mobile number in Personal Info." : null,
+    !branch ? "Select a preferred branch in Choose Course." : null,
+    selectedCourseSlugs.length === 0 ? "Select at least one course in Choose Course." : null,
+    selectedCourseSlugs.length > 6 ? "Select no more than 6 courses." : null,
+    parentMobile.length !== 10 ? "Enter a valid 10-digit parent's mobile number." : null,
+    !presentStatus ? "Select your present status." : null,
+    !password ? "Create a password." : passwordIssue,
+    !agreeTerms ? "Agree to the declaration and terms." : null,
+    !paymentDone ? "Confirm your payment details on the Payment step." : null,
+    !signature.trim()
+      ? "Type your full name as your signature."
+      : !signatureMatchesName
+        ? `Your signature must match your name: ${fullName.trim() || "enter your name in Personal Info"}.`
+        : null,
+    totalFee > 0 && paymentMode === "custom" && !validCustomPaymentAmount
+      ? `Enter a payment amount greater than ₹0 and no more than ${inr(totalFee)}.`
+      : null,
+    totalFee > 0 && paymentMode === "installments" && paidInstallments.length === 0
+      ? "Choose at least one installment to pay."
+      : null,
+  ].filter((issue): issue is string => issue !== null)
 
   useEffect(() => {
     const draft = readStudentRegistrationDraft()
@@ -478,72 +508,11 @@ export default function UserRegisterPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
 
-    if (catalogueError) {
-      toast(catalogueError, { variant: "destructive" })
-      return
-    }
-
-    if (
-      !fullName.trim() ||
-      !fatherName.trim() ||
-      !EMAIL_PATTERN.test(email.trim()) ||
-      phone.length !== 10 ||
-      !branch ||
-      selectedCourseSlugs.length === 0 ||
-      parentMobile.length !== 10
-    ) {
-      toast("Complete all required personal, course, and contact fields before creating your account.", {
+    setSubmissionError(null)
+    if (registrationIssues.length > 0) {
+      toast("Please fix the items shown below before creating your account.", {
         variant: "destructive",
       })
-      return
-    }
-
-    if (!password) {
-      toast("Create a password before creating your account.", { variant: "destructive" })
-      return
-    }
-
-    if (passwordIssue) {
-      toast(passwordIssue, { variant: "destructive" })
-      return
-    }
-
-    if (!agreeTerms) {
-      toast("Please agree to the terms", { variant: "destructive" })
-      return
-    }
-
-    if (!paymentDone) {
-      toast("Please complete the payment", { variant: "destructive" })
-      return
-    }
-
-    if (!presentStatus) {
-      toast("Please select your present status", { variant: "destructive" })
-      return
-    }
-
-    if (!signatureMatchesName) {
-      toast("Type your full name exactly as your signature.", { variant: "destructive" })
-      return
-    }
-
-    if (totalFee > 0 && paymentMode === "custom" && !validCustomPaymentAmount) {
-      toast(`Enter an amount greater than ₹0 and no more than ${inr(totalFee)}.`, {
-        variant: "destructive",
-      })
-      return
-    }
-
-    if (totalFee > 0 && paymentMode === "installments" && paidInstallments.length === 0) {
-      toast("Choose which installment you are paying, or select all of them", {
-        variant: "destructive",
-      })
-      return
-    }
-
-    if (!registrationReady) {
-      toast("Complete all required fields before creating your account.", { variant: "destructive" })
       return
     }
 
@@ -570,7 +539,7 @@ export default function UserRegisterPage() {
         }),
       })
 
-      const data = await res.json().catch(() => ({}))
+      const data: { error?: string; studentId?: string } = await res.json().catch(() => ({}))
 
       if (!res.ok) {
         if (res.status === 409) {
@@ -584,13 +553,17 @@ export default function UserRegisterPage() {
         }
 
         if (res.status === 429) {
-          toast(data.error || "Too many attempts. Please wait and try again.", {
+          const message = data.error || "Too many attempts. Please wait and try again."
+          setSubmissionError(message)
+          toast(message, {
             variant: "destructive",
           })
           return
         }
 
-        toast(data.error || "We couldn't complete your registration.", {
+        const message = data.error || "We couldn't complete your registration."
+        setSubmissionError(message)
+        toast(message, {
           variant: "destructive",
         })
         return
@@ -625,29 +598,12 @@ export default function UserRegisterPage() {
     } catch (err) {
       console.error("[register] submission crashed:", err)
       const info = describeAuthError(err)
+      setSubmissionError(info.message)
       toast(info.message, { variant: "destructive" })
     } finally {
       setSubmitting(false)
     }
   }
-
-  const passwordIssue = password ? passwordProblem(password) : null
-  const registrationReady = Boolean(
-    fullName.trim() &&
-    fatherName.trim() &&
-    EMAIL_PATTERN.test(email.trim()) &&
-    phone.length === 10 &&
-    branch &&
-    selectedCourseSlugs.length > 0 &&
-    parentMobile.length === 10 &&
-    presentStatus &&
-    signatureMatchesName &&
-    password &&
-    !passwordIssue &&
-    agreeTerms &&
-    paymentDone &&
-    (totalFee <= 0 || (paymentMode === "custom" ? validCustomPaymentAmount : paidInstallments.length > 0))
-  )
 
   if (alreadyRegistered) {
     return (
@@ -785,7 +741,7 @@ export default function UserRegisterPage() {
               </div>
 
               <div className="flex flex-1 flex-col px-4 py-5 sm:px-6 lg:px-8 lg:py-6">
-                <form onSubmit={handleSubmit} className="flex flex-1 flex-col">
+                <form onSubmit={handleSubmit} noValidate className="flex flex-1 flex-col">
                   <div className="flex-1 overflow-hidden">
                     <AnimatePresence mode="wait" custom={direction}>
                       <motion.div
@@ -1341,6 +1297,28 @@ export default function UserRegisterPage() {
                     </AnimatePresence>
                   </div>
 
+                  {step === totalSteps && (registrationIssues.length > 0 || submissionError) && (
+                    <div
+                      role="alert"
+                      className="mt-4 rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive"
+                    >
+                      {submissionError ? (
+                        <p>{submissionError}</p>
+                      ) : (
+                        <>
+                          <p className="font-medium">
+                            Complete these items before your account can be created:
+                          </p>
+                          <ul className="mt-2 list-disc space-y-1 pl-5">
+                            {registrationIssues.map((issue) => (
+                              <li key={issue}>{issue}</li>
+                            ))}
+                          </ul>
+                        </>
+                      )}
+                    </div>
+                  )}
+
                   <div className="mt-6 flex items-center gap-3 border-t border-border pt-4">
                     <Button type="button" variant="outline" onClick={goPrev} className="gap-1.5" disabled={submitting || step === 1}>
                       <ArrowLeft className="size-4" />
@@ -1370,11 +1348,7 @@ export default function UserRegisterPage() {
                       <Button
                         type="submit"
                         className="gap-1.5 px-6"
-                        disabled={
-                          submitting ||
-                          catalogueError !== null ||
-                          !registrationReady
-                        }
+                        disabled={submitting}
                       >
                         {submitting ? (
                           <>
