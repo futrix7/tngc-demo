@@ -7,15 +7,12 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/com
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { AlertCircle, ArrowRight, GraduationCap, Loader2, Lock, Mail, LogOut, ShieldAlert } from "lucide-react"
+import { AlertCircle, ArrowRight, GraduationCap, Loader2, Lock, Phone, LogOut, ShieldAlert } from "lucide-react"
 import { supabase } from "@/lib/supabase"
 import { useToast } from "@/components/ui/sonner"
 import { useAuthRole, useAuthState, ROLE_HOME, resolvePostLoginPath } from "@/hooks/use-auth"
 import { describeAuthError, type AuthErrorInfo } from "@/lib/errors"
-import {
-  readStudentRegistrationDraft,
-  type StudentRegistrationDraft,
-} from "@/lib/auth/student-registration-draft"
+import { normalizeIndianPhone } from "@/lib/phone"
 import { PasswordVisibilityToggle } from "@/components/auth/password-visibility-toggle"
 
 export default function UserLoginPage() {
@@ -27,27 +24,17 @@ export default function UserLoginPage() {
     isAuthenticated
   )
 
-  const [email, setEmail] = useState("")
+  const [phone, setPhone] = useState("")
   const [password, setPassword] = useState("")
   const [passwordVisible, setPasswordVisible] = useState(false)
   const [loading, setLoading] = useState(false)
-  const [fieldErrors, setFieldErrors] = useState<{ email?: string; password?: string }>({})
+  const [fieldErrors, setFieldErrors] = useState<{ phone?: string; password?: string }>({})
   const [formError, setFormError] = useState<AuthErrorInfo | null>(null)
-  const [pendingRegistrationDraft, setPendingRegistrationDraft] = useState<StudentRegistrationDraft | null>(null)
 
   // Read at the point of use rather than mirrored into state: the search params
   // never change while the page is mounted, and syncing them would cost an
   // extra render on every sign-in page load.
   const readNextPath = () => new URLSearchParams(window.location.search).get("next")
-
-  // Prefill the email when arriving from the register page.
-  useEffect(() => {
-    const prefill = new URLSearchParams(window.location.search).get("email")
-    const draft = readStudentRegistrationDraft()
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setPendingRegistrationDraft(draft)
-    if (prefill || draft?.email) setEmail(prefill || draft?.email || "")
-  }, [])
 
   // Only students belong here. Resolve the role first so an admin or a
   // profile-less account gets a useful screen instead of a redirect loop
@@ -60,13 +47,12 @@ export default function UserLoginPage() {
   }, [sessionLoading, roleLoading, isAuthenticated, accountRole, router])
 
   function validate() {
-    const next: { email?: string; password?: string } = {}
-    const trimmedEmail = email.trim()
+    const next: { phone?: string; password?: string } = {}
 
-    if (!trimmedEmail) {
-      next.email = "Email is required"
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(trimmedEmail)) {
-      next.email = "Enter a valid email address"
+    if (!phone.trim()) {
+      next.phone = "Phone number is required"
+    } else if (!normalizeIndianPhone(phone)) {
+      next.phone = "Enter a valid 10-digit mobile number"
     }
 
     if (!password) {
@@ -87,7 +73,7 @@ export default function UserLoginPage() {
 
     try {
       const { data, error } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
+        phone: normalizeIndianPhone(phone)!.e164,
         password,
       })
 
@@ -96,7 +82,7 @@ export default function UserLoginPage() {
         setFormError(info)
         toast(info.message, {
           variant: "destructive",
-          description: info.alreadyRegistered ? "Try signing in instead, or reset your password." : undefined,
+          description: info.alreadyRegistered ? "Try signing in instead." : undefined,
         })
         return
       }
@@ -126,9 +112,6 @@ export default function UserLoginPage() {
   }
 
   const disabled = loading || sessionLoading
-  const matchingDraft = pendingRegistrationDraft?.email.toLowerCase() === email.trim().toLowerCase()
-    ? pendingRegistrationDraft
-    : null
 
   // Already signed in, but not as a student. Show where to go instead of
   // redirecting to a dashboard whose guard would only bounce them back.
@@ -178,8 +161,8 @@ export default function UserLoginPage() {
             <CardTitle className="text-2xl font-bold">No student account found</CardTitle>
             <CardDescription>
               You&apos;re signed in as{" "}
-              <span className="font-medium text-foreground">{session?.user?.email}</span>, but this email
-              isn&apos;t linked to a student record yet. Contact the institute to activate it.
+              <span className="font-medium text-foreground">{session?.user?.phone}</span>, but this phone
+              number isn&apos;t linked to a student record yet. Contact the institute to activate it.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -212,58 +195,33 @@ export default function UserLoginPage() {
         </CardHeader>
 
         <CardContent>
-          {matchingDraft && (
-            <div role="status" className="mb-4 space-y-2 rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm">
-              <p className="font-semibold">Unfinished registration found</p>
-              <p className="text-muted-foreground">
-                {matchingDraft.fullName || matchingDraft.email}
-                {matchingDraft.selectedCourseSlugs.length > 0 &&
-                  ` · ${matchingDraft.selectedCourseSlugs.length} course${matchingDraft.selectedCourseSlugs.length === 1 ? "" : "s"} selected`}
-                . Your details are saved on this device; your password is not saved.
-              </p>
-              <Link href="/auth/user/register" className="inline-block font-medium text-primary hover:underline">
-                Resume registration
-              </Link>
-            </div>
-          )}
-
           <form className="space-y-4" onSubmit={handleLogin} noValidate>
             <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
+              <Label htmlFor="phone">Phone Number</Label>
               <div className="relative">
-                <Mail className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                <Phone className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
-                  id="email"
-                  type="email"
-                  autoComplete="email"
-                  placeholder="you@example.com"
-                  aria-invalid={Boolean(fieldErrors.email)}
+                  id="phone"
+                  type="tel"
+                  inputMode="numeric"
+                  autoComplete="tel"
+                  maxLength={16}
+                  placeholder="10-digit mobile number"
+                  aria-invalid={Boolean(fieldErrors.phone)}
                   className="h-10 pl-10"
-                  value={email}
+                  value={phone}
                   onChange={(e) => {
-                    setEmail(e.target.value)
-                    if (fieldErrors.email) setFieldErrors((f) => ({ ...f, email: undefined }))
+                    setPhone(e.target.value)
+                    if (fieldErrors.phone) setFieldErrors((f) => ({ ...f, phone: undefined }))
                   }}
                   disabled={disabled}
                 />
               </div>
-              {fieldErrors.email && <p className="text-xs text-destructive">{fieldErrors.email}</p>}
+              {fieldErrors.phone && <p className="text-xs text-destructive">{fieldErrors.phone}</p>}
             </div>
 
             <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label htmlFor="password">Password</Label>
-                <Link
-                  href={
-                    email.trim() && /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email.trim())
-                      ? `/auth/user/reset-password?email=${encodeURIComponent(email.trim())}`
-                      : "/auth/user/reset-password"
-                  }
-                  className="text-xs text-muted-foreground transition-colors hover:text-primary"
-                >
-                  Forgot password?
-                </Link>
-              </div>
+              <Label htmlFor="password">Password</Label>
               <div className="relative">
                 <Lock className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
@@ -298,35 +256,6 @@ export default function UserLoginPage() {
                 <AlertCircle className="mt-0.5 size-4 shrink-0" />
                 <div className="space-y-1">
                   <p>{formError.message}</p>
-                  {formError.recovery === "reset" && (
-                    <Link
-                      href={`/auth/user/reset-password?email=${encodeURIComponent(email.trim())}`}
-                      className="inline-block font-medium underline underline-offset-2"
-                    >
-                      Reset your password
-                    </Link>
-                  )}
-                  {formError.recovery === "resend-confirmation" && (
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        try {
-                          const { error: resendError } = await supabase.auth.resend({
-                            type: "signup",
-                            email: email.trim(),
-                          })
-                          if (resendError) throw resendError
-                          toast("Confirmation email sent", { variant: "success" })
-                        } catch (err) {
-                          const info = describeAuthError(err)
-                          toast(info.message, { variant: "destructive" })
-                        }
-                      }}
-                      className="inline-block font-medium underline underline-offset-2"
-                    >
-                      Resend confirmation email
-                    </button>
-                  )}
                 </div>
               </div>
             )}
@@ -344,16 +273,15 @@ export default function UserLoginPage() {
                 </>
               )}
             </Button>
+
+            <Link href="/" className="block">
+              <Button type="button" variant="outline" className="h-10 w-full gap-2">
+                Go to landing page
+              </Button>
+            </Link>
           </form>
 
-          <p className="mt-6 text-center text-sm text-muted-foreground">
-            Don&apos;t have an account?{" "}
-            <Link href="/auth/user/register" className="font-medium text-primary hover:underline">
-              Sign up
-            </Link>
-          </p>
-
-          <p className="mt-3 text-center text-xs text-muted-foreground">
+          <p className="mt-6 text-center text-xs text-muted-foreground">
             Staff member?{" "}
             <Link href="/auth/admin/login" className="font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground">
               Admin sign in

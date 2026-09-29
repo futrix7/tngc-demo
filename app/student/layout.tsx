@@ -5,23 +5,19 @@ import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { useTheme } from "@/components/theme-provider"
 import {
-  LayoutDashboard,
-  CalendarCheck,
   Wallet,
-  Megaphone,
   UserCircle,
   Sun,
   Moon,
+  Award,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { AuthGuard } from "@/components/auth/auth-guard"
 
 const navLinks = [
-  { label: "Home", href: "/student/dashboard", icon: LayoutDashboard },
-  { label: "Attendance", href: "/student/attendance", icon: CalendarCheck },
-  { label: "Fee", href: "/student/fee", icon: Wallet },
-  { label: "Notices", href: "/student/announcements", icon: Megaphone },
   { label: "Profile", href: "/student/profile", icon: UserCircle },
+  { label: "Certificates", href: "/student/profile/certificates", icon: Award },
+  { label: "Fee", href: "/student/fee", icon: Wallet },
 ]
 
 function ThemeToggle() {

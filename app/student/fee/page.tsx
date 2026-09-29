@@ -102,6 +102,7 @@ export default function StudentFee() {
   const [payOpen, setPayOpen] = useState(false)
   const [method, setMethod] = useState("upi")
   const [reference, setReference] = useState("")
+  const [paymentAmount, setPaymentAmount] = useState("")
   const [paid, setPaid] = useState(false)
   const [paying, setPaying] = useState(false)
   const [selectedInstallmentKeys, setSelectedInstallmentKeys] = useState<string[]>([])
@@ -466,10 +467,15 @@ export default function StudentFee() {
   const selectedIds = selectedInstallments.flatMap((i) => i.payableIds)
   const selectedTotal = selectedInstallments
     .reduce((sum, i) => sum + i.payableBalance, 0)
+  const allPayableTotal = payableInstallments.reduce((sum, i) => sum + i.payableBalance, 0)
+  const displayedPaymentAmount = paymentAmount.trim()
+    ? Number(paymentAmount)
+    : selectedTotal > 0 ? selectedTotal : allPayableTotal
 
   const MAX_SELECTED = 3
 
   function toggleInstallment(key: string) {
+    setPaymentAmount("")
     setSelectedInstallmentKeys((prev) => {
       if (prev.includes(key)) return prev.filter((x) => x !== key)
       if (prev.length >= MAX_SELECTED) {
@@ -480,15 +486,18 @@ export default function StudentFee() {
     })
   }
 
-  function selectAllPayable() {
-    setSelectedInstallmentKeys(payableInstallments.map((i) => i.id))
-  }
-
   async function handlePay(payAll = false) {
     if (paying || !studentId) return
 
     if (!payAll && selectedInstallmentKeys.length === 0) {
       toast("Select at least one installment to pay.", { variant: "warning" })
+      return
+    }
+
+    const availableBalance = payAll ? allPayableTotal : selectedTotal
+    const amount = paymentAmount.trim() ? Number(paymentAmount) : availableBalance
+    if (!Number.isFinite(amount) || amount <= 0 || amount > availableBalance) {
+      toast(`Enter an amount up to ₹${availableBalance.toLocaleString("en-IN")} for this selection.`, { variant: "warning" })
       return
     }
 
@@ -516,6 +525,7 @@ export default function StudentFee() {
         body: JSON.stringify({
           installmentIds: payAll ? undefined : selectedIds,
           payAll,
+          amount,
           method,
           reference,
         }),
@@ -540,6 +550,7 @@ export default function StudentFee() {
 
       setSelectedInstallmentKeys([])
       setReference("")
+      setPaymentAmount("")
       setPaid(true)
       setTimeout(() => {
         setPayOpen(false)
@@ -635,18 +646,7 @@ export default function StudentFee() {
               ) : (
                 <div className="space-y-4 pt-2">
                   <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <Label>Choose installments</Label>
-                      {payableInstallments.length > MAX_SELECTED && (
-                        <button
-                          type="button"
-                          onClick={selectAllPayable}
-                          className="text-xs font-medium text-primary hover:underline"
-                        >
-                          Select all {payableInstallments.length}
-                        </button>
-                      )}
-                    </div>
+                    <Label>Choose up to three installment positions</Label>
 
                     <div className="space-y-2">
                       {payableInstallments.map((inst) => {
@@ -685,7 +685,25 @@ export default function StudentFee() {
                     </div>
 
                     <p className="text-xs text-muted-foreground">
-                      Select up to {MAX_SELECTED} installments, or pay everything at once below.
+                      You can pay any amount up to the selected balance. It is applied in due-date order.
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="payment-amount">Custom amount</Label>
+                    <Input
+                      id="payment-amount"
+                      type="number"
+                      inputMode="decimal"
+                      min="0.01"
+                      max={allPayableTotal}
+                      step="0.01"
+                      value={paymentAmount}
+                      onChange={(event) => setPaymentAmount(event.target.value)}
+                      placeholder={`Up to ₹${(selectedTotal || allPayableTotal).toLocaleString("en-IN")}`}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Leave blank to pay the full selected balance. With no selection, this amount is applied across all outstanding installments.
                     </p>
                   </div>
 
@@ -730,7 +748,7 @@ export default function StudentFee() {
                       with cash, or transferring from a bank branch. */}
                   {method === "upi" && (
                     <UpiPayBlock
-                      amount={selectedTotal > 0 ? selectedTotal : null}
+                      amount={displayedPaymentAmount > 0 ? displayedPaymentAmount : null}
                       note="Pay the amount above, then confirm. Our team verifies the reference before the balance updates."
                     />
                   )}
@@ -739,7 +757,7 @@ export default function StudentFee() {
                     <Button
                       className="w-full gap-2"
                       onClick={() => handlePay(false)}
-                      disabled={paying || selectedInstallmentKeys.length === 0}
+                      disabled={paying || selectedInstallmentKeys.length === 0 || displayedPaymentAmount > selectedTotal}
                     >
                       {paying ? (
                         <>
@@ -749,22 +767,21 @@ export default function StudentFee() {
                       ) : (
                         <>
                           <CreditCard className="size-4" />
-                          Pay {selectedTotal > 0 ? `₹${selectedTotal.toLocaleString("en-IN")}` : ""}
+                          Pay ₹{displayedPaymentAmount.toLocaleString("en-IN")}
                           {selectedInstallmentKeys.length > 0 && ` (${selectedInstallmentKeys.length})`}
                         </>
                       )}
                     </Button>
 
-                    {payableInstallments.length > MAX_SELECTED && (
+                    {payableInstallments.length > MAX_SELECTED && selectedInstallmentKeys.length === 0 && (
                       <Button
                         variant="outline"
                         className="w-full gap-2"
                         onClick={() => handlePay(true)}
-                        disabled={paying}
+                        disabled={paying || displayedPaymentAmount > allPayableTotal}
                       >
                         <CheckCircle2 className="size-4" />
-                        Pay all {payableInstallments.length} remaining (
-                        {payableInstallments.reduce((s, i) => s + i.payableBalance, 0).toLocaleString("en-IN")})
+                        Pay all outstanding (₹{displayedPaymentAmount.toLocaleString("en-IN")})
                       </Button>
                     )}
                   </div>

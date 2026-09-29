@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/sheet"
 import { Button } from "@/components/ui/button"
 import { LucideIcon } from "lucide-react"
+import { cn } from "@/lib/utils"
 
 interface FormSheetProps {
   open: boolean
@@ -19,6 +20,7 @@ interface FormSheetProps {
   submitLabel: string
   onSubmit: () => void
   children: ReactNode
+  contentClassName?: string
 }
 
 export function FormSheet({
@@ -29,10 +31,11 @@ export function FormSheet({
   submitLabel,
   onSubmit,
   children,
+  contentClassName,
 }: FormSheetProps) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="gap-0">
+      <SheetContent side="right" className={cn("gap-0", contentClassName)}>
         <SheetHeader>
           <SheetTitle className="flex items-center gap-2">
             <Icon className="size-5" />

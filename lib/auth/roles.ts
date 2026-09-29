@@ -9,7 +9,7 @@ export const ROLE_LOGIN: Record<AuthRole, string> = {
 /** Canonical landing page for each portal. Never point a signed-in user at a login page. */
 export const ROLE_HOME: Record<AuthRole, string> = {
   admin: "/admin/dashboard",
-  student: "/student/dashboard",
+  student: "/student/profile",
 }
 
 /**

@@ -1,7 +1,5 @@
-"use client"
-
-import { ResetPasswordForm } from "@/components/auth/reset-password-form"
+import { redirect } from "next/navigation"
 
 export default function UserResetPasswordPage() {
-  return <ResetPasswordForm role="student" />
+  redirect("/auth/user/login")
 }

@@ -6,8 +6,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
-import { Users, BookOpen, ClipboardCheck, UserPlus, TrendingUp, MapPin, Loader2 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { Users, BookOpen, UserPlus, TrendingUp, MapPin, Loader2, IndianRupee, Wallet } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { tooltipStyle, axisStyle, gridStyle, CHART_PALETTE } from "@/lib/chart-theme";
 
@@ -59,15 +58,13 @@ export default function AdminDashboardPage() {
   const [studentGrowth, setStudentGrowth] = useState("");
   const [activeCourses, setActiveCourses] = useState(0);
   const [newCoursesThisQuarter, setNewCoursesThisQuarter] = useState(0);
-  const [attendanceToday, setAttendanceToday] = useState("0%");
-  const [attendanceNote, setAttendanceNote] = useState("");
+  const [feeSnapshot, setFeeSnapshot] = useState({ collectedThisMonth: 0, outstanding: 0, dueSoon: 0 });
   const [enrollmentTrends, setEnrollmentTrends] = useState<{ month: string; students: number }[]>([]);
   const [courseEnrollment, setCourseEnrollment] = useState<{ course: string; enrollments: number }[]>([]);
   const [recentEnrollments, setRecentEnrollments] = useState<
     { name: string; course: string; branch: string; date: string; status: string }[]
   >([]);
   const [branchRevenue, setBranchRevenue] = useState<{ branch: string; revenue: number }[]>([]);
-  const [weeklyAttendance, setWeeklyAttendance] = useState<{ day: string; rate: number }[]>([]);
 
   async function fetchDashboardData() {
     try {
@@ -76,19 +73,21 @@ export default function AdminDashboardPage() {
       const thisMonth = now.getMonth();
       const thisYear = now.getFullYear();
 
-      const [studentsRes, coursesRes, attendanceRes, paymentsRes, branchesRes] = await Promise.all([
+      const [studentsRes, coursesRes, paymentsRes, branchesRes, feesRes, installmentsRes] = await Promise.all([
         supabase.from("students").select("id, full_name, course_slug, branch_id, enrollment_date, status"),
         supabase.from("courses").select("id, slug, name, created_at, status"),
-        supabase.from("attendance").select("id, student_id, date, status"),
-        supabase.from("payments").select("id, student_id, amount, status"),
+        supabase.from("payments").select("id, student_id, amount, status, payment_date"),
         supabase.from("branches").select("id, name"),
+        supabase.from("fees").select("total_fee, paid_amount, pending_amount"),
+        supabase.from("fee_installments").select("amount, due_date, status"),
       ]);
 
       const students = getSafeRows(studentsRes, "students");
       const courses = getSafeRows(coursesRes, "courses");
-      const attendance = getSafeRows(attendanceRes, "attendance");
       const payments = getSafeRows(paymentsRes, "payments");
       const branches = getSafeRows(branchesRes, "branches");
+      const fees = getSafeRows(feesRes, "fees");
+      const installments = getSafeRows(installmentsRes, "fee installments");
 
       const branchMap = new Map(branches.map((b) => [b.id, b.name]));
       const courseMap = new Map(courses.map((c) => [c.slug, c.name]));
@@ -115,12 +114,21 @@ export default function AdminDashboardPage() {
       const newCourses = courses.filter((c) => new Date(c.created_at) >= quarterStart);
       setNewCoursesThisQuarter(newCourses.length);
 
-      const todayAttendance = attendance.filter((a) => a.date === todayStr);
-      const presentToday = todayAttendance.filter((a) => a.status === "Present" || a.status === "Late").length;
-      const totalToday = todayAttendance.length;
-      const attendancePct = totalToday > 0 ? Math.round((presentToday / totalToday) * 100) : 0;
-      setAttendanceToday(`${attendancePct}%`);
-      setAttendanceNote(attendancePct >= 85 ? "Above 85% target" : "Below 85% target");
+      const monthKey = `${thisYear}-${String(thisMonth + 1).padStart(2, "0")}`;
+      const collectedThisMonth = payments
+        .filter((payment) => payment.status === "Paid" && payment.payment_date?.startsWith(monthKey))
+        .reduce((sum, payment) => sum + Number(payment.amount), 0);
+      const outstanding = fees.reduce(
+        (sum, fee) => sum + Number(fee.pending_amount ?? Math.max(0, fee.total_fee - fee.paid_amount)),
+        0
+      );
+      const dueThrough = new Date(now);
+      dueThrough.setDate(dueThrough.getDate() + 30);
+      const dueThroughStr = getLocalDateStr(dueThrough);
+      const dueSoon = installments
+        .filter((installment) => installment.status !== "Paid" && installment.due_date >= todayStr && installment.due_date <= dueThroughStr)
+        .reduce((sum, installment) => sum + Number(installment.amount), 0);
+      setFeeSnapshot({ collectedThisMonth, outstanding, dueSoon });
 
       // --- Enrollment Trends (last 6 months) ---
       const monthLabels: { label: string; key: string }[] = [];
@@ -188,31 +196,6 @@ export default function AdminDashboardPage() {
         .sort((a, b) => b.revenue - a.revenue);
       setBranchRevenue(branchRevData);
 
-      // --- Weekly Attendance ---
-      const dayTotals = new Map<string, { present: number; total: number }>();
-      ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].forEach((d) => dayTotals.set(d, { present: 0, total: 0 }));
-      attendance.forEach((a) => {
-        const d = new Date(a.date + "T00:00:00");
-        const dayIndex = d.getDay();
-        const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-        const dayName = dayNames[dayIndex];
-        const entry = dayTotals.get(dayName);
-        if (entry) {
-          entry.total++;
-          if (a.status === "Present" || a.status === "Late") {
-            entry.present++;
-          }
-        }
-      });
-      const weeklyData = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => {
-        const entry = dayTotals.get(day)!;
-        return {
-          day,
-          rate: entry.total > 0 ? Math.round((entry.present / entry.total) * 100) : 0,
-        };
-      });
-      setWeeklyAttendance(weeklyData);
-
     } catch (error) {
       console.error("Error fetching dashboard data:", error);
     } finally {
@@ -243,12 +226,20 @@ export default function AdminDashboardPage() {
       bgColor: "bg-emerald-500/10",
     },
     {
-      title: "Attendance Today",
-      value: attendanceToday,
-      icon: ClipboardCheck,
-      description: attendanceNote,
-      color: "text-violet-500",
-      bgColor: "bg-violet-500/10",
+      title: "Collected This Month",
+      value: `₹${feeSnapshot.collectedThisMonth.toLocaleString("en-IN")}`,
+      icon: IndianRupee,
+      description: "Verified payments",
+      color: "text-sky-600",
+      bgColor: "bg-sky-500/10",
+    },
+    {
+      title: "Outstanding Fees",
+      value: `₹${feeSnapshot.outstanding.toLocaleString("en-IN")}`,
+      icon: Wallet,
+      description: `₹${feeSnapshot.dueSoon.toLocaleString("en-IN")} due in 30 days`,
+      color: "text-amber-600",
+      bgColor: "bg-amber-500/10",
     },
   ];
 
@@ -267,7 +258,7 @@ export default function AdminDashboardPage() {
         <p className="text-xs text-muted-foreground">Welcome back, Admin</p>
       </div>
 
-      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
         {statCards.map((stat) => (
           <Card key={stat.title}>
             <CardContent className="flex items-center justify-between">
@@ -368,31 +359,27 @@ export default function AdminDashboardPage() {
           </CardContent>
         </Card>
 
-        {/* Weekly Attendance */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
-              <ClipboardCheck className="h-4 w-4" />
-              Weekly Attendance
+              <Wallet className="h-4 w-4" />
+              Fee Snapshot
             </CardTitle>
-            <CardDescription className="text-xs">Avg attendance by day</CardDescription>
+            <CardDescription className="text-xs">Verified collection and upcoming dues</CardDescription>
           </CardHeader>
-          <CardContent>
-            {weeklyAttendance.length === 0 ? (
-              <div className="flex h-[200px] items-center justify-center text-sm text-muted-foreground">
-                No attendance data yet
-              </div>
-            ) : (
-              <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={weeklyAttendance}>
-                  <CartesianGrid {...gridStyle} />
-                  <XAxis dataKey="day" tick={axisStyle} />
-                  <YAxis domain={[0, 100]} tick={axisStyle} />
-                  <Tooltip contentStyle={tooltipStyle} />
-                  <Bar dataKey="rate" name="Attendance %" fill="#10b981" radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            )}
+          <CardContent className="space-y-4">
+            <div className="flex items-center justify-between gap-4 border-b pb-3">
+              <span className="text-sm text-muted-foreground">Collected this month</span>
+              <span className="text-sm font-semibold">₹{feeSnapshot.collectedThisMonth.toLocaleString("en-IN")}</span>
+            </div>
+            <div className="flex items-center justify-between gap-4 border-b pb-3">
+              <span className="text-sm text-muted-foreground">Outstanding balance</span>
+              <span className="text-sm font-semibold">₹{feeSnapshot.outstanding.toLocaleString("en-IN")}</span>
+            </div>
+            <div className="flex items-center justify-between gap-4">
+              <span className="text-sm text-muted-foreground">Due in next 30 days</span>
+              <span className="text-sm font-semibold">₹{feeSnapshot.dueSoon.toLocaleString("en-IN")}</span>
+            </div>
           </CardContent>
         </Card>
 

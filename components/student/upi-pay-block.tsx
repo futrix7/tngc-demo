@@ -86,9 +86,9 @@ export function UpiPayBlock({ amount, note, className }: UpiPayBlockProps) {
         variant="outline"
         size="sm"
         onClick={copyNumber}
-        className="mt-3 h-8 gap-1.5 text-xs"
+        className="mt-3 h-10 gap-2 text-sm"
       >
-        {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+        {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
         {copied ? "Copied" : "Copy number"}
       </Button>
 

@@ -75,7 +75,6 @@ export default function StudentProfile() {
   const [editOpen, setEditOpen] = useState(false)
   const [editName, setEditName] = useState("")
   const [editEmail, setEditEmail] = useState("")
-  const [editPhone, setEditPhone] = useState("")
   const [editAddress, setEditAddress] = useState("")
   const [loadError, setLoadError] = useState<string | null>(null)
   const [attempt, setAttempt] = useState(0)
@@ -93,7 +92,7 @@ export default function StudentProfile() {
 
       const { data: student, error: studentError } = await supabase
         .from("students")
-        .select("*, courses(name), branches(name)")
+        .select("*, branches(name)")
         .eq("user_id", user.id)
         .single()
 
@@ -107,16 +106,31 @@ export default function StudentProfile() {
         return
       }
 
+      const { data: feeRows } = await supabase
+        .from("fees")
+        .select("course_slug")
+        .eq("student_id", student.id)
+      const courseSlugs = [...new Set([
+        ...(feeRows ?? []).map((fee) => fee.course_slug),
+        student.course_slug,
+      ].filter((slug): slug is string => Boolean(slug)))]
+      const { data: courseRows } = courseSlugs.length > 0
+        ? await supabase.from("courses").select("slug, name").in("slug", courseSlugs)
+        : { data: [] as { slug: string; name: string }[] }
+      const courseName = courseSlugs
+        .map((slug) => courseRows?.find((course) => course.slug === slug)?.name ?? slug)
+        .join(", ")
+
       {
         const s = student
         const p: Profile = {
           name: s.full_name,
           id: s.id,
-          email: s.email,
+          email: s.email || "—",
           phone: s.phone,
           dob: formatDate(s.date_of_birth),
           address: s.address || "—",
-          course: s.courses?.name || "—",
+          course: courseName || "—",
           branch: s.branches?.name || "—",
           joinDate: formatDate(s.enrollment_date),
           batchTime: s.batch_time || "—",
@@ -127,8 +141,7 @@ export default function StudentProfile() {
         }
         setProfile(p)
         setEditName(p.name)
-        setEditEmail(p.email)
-        setEditPhone(p.phone)
+        setEditEmail(s.email ?? "")
         setEditAddress(p.address)
       }
       setLoading(false)
@@ -137,8 +150,8 @@ export default function StudentProfile() {
   }, [attempt])
 
   const handleSave = async () => {
-    if (!editName.trim() || !editPhone.trim()) {
-      toast("Name and phone are required", { variant: "destructive" })
+    if (!editName.trim()) {
+      toast("Name is required", { variant: "destructive" })
       return
     }
     setSaving(true)
@@ -147,7 +160,7 @@ export default function StudentProfile() {
       .from("students")
       .update({
         full_name: editName,
-        phone: editPhone,
+        email: editEmail.trim() || null,
         address: editAddress || null,
       })
       .eq("id", profile.id)
@@ -159,10 +172,10 @@ export default function StudentProfile() {
     }
 
     await supabase.auth.updateUser({
-      data: { full_name: editName, phone: editPhone },
+      data: { full_name: editName },
     })
 
-    setProfile({ ...profile, name: editName, email: editEmail, phone: editPhone, address: editAddress })
+    setProfile({ ...profile, name: editName, email: editEmail.trim() || "—", address: editAddress })
     setEditOpen(false)
     setSaving(false)
     toast("Profile updated successfully", { variant: "success" })
@@ -171,7 +184,6 @@ export default function StudentProfile() {
   const handleCancel = () => {
     setEditName(profile.name)
     setEditEmail(profile.email)
-    setEditPhone(profile.phone)
     setEditAddress(profile.address)
     setEditOpen(false)
   }
@@ -218,8 +230,8 @@ export default function StudentProfile() {
               <div className="flex size-18 sm:size-20 items-center justify-center rounded-full border-4 border-background bg-muted text-xl sm:text-2xl font-bold" style={{ width: "5rem", height: "5rem" }}>
                 {profile.name.split(" ").map((n) => n[0]).join("")}
               </div>
-              <button className="absolute bottom-0 right-0 size-6 sm:size-7 rounded-full bg-primary text-primary-foreground flex items-center justify-center">
-                <Camera className="size-3 sm:size-3.5" />
+              <button className="absolute bottom-0 right-0 size-9 rounded-full bg-primary text-primary-foreground flex items-center justify-center">
+                <Camera className="size-4" />
               </button>
             </div>
             <div className="flex-1 text-center sm:text-left pb-1">
@@ -246,8 +258,9 @@ export default function StudentProfile() {
                     <Input id="edit-email" type="email" value={editEmail} onChange={(e) => setEditEmail(e.target.value)} />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="edit-phone">Phone</Label>
-                    <Input id="edit-phone" value={editPhone} onChange={(e) => setEditPhone(e.target.value)} />
+                    <Label htmlFor="profile-phone">Phone (login number)</Label>
+                    <Input id="profile-phone" value={profile.phone} readOnly />
+                    <p className="text-xs text-muted-foreground">Contact administration to change the sign-in number.</p>
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="edit-address">Address</Label>

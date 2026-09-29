@@ -1,6 +1,6 @@
 "use client"
 
-import { Phone, MapPin, MessageCircle, Sparkles, ArrowRight } from "lucide-react"
+import { Phone, MessageCircle, Sparkles, ArrowRight } from "lucide-react"
 import Link from "next/link"
 import { FaWhatsapp } from "react-icons/fa"
 
@@ -10,12 +10,6 @@ const quickLinks = [
   { label: "Our Address",       href: "/#address"  },
   { label: "Contact Us",        href: "/#contact"  },
   { label: "Full Catalogue",    href: "/courses"   },
-]
-
-const branches = [
-  { name: "Ramanthapur",   tag: "Main", href: "https://maps.google.com/maps?q=17.39359,78.53582" },
-  { name: "Amberpet",      tag: null,   href: "https://maps.google.com/maps?q=17.3786,78.5387"   },
-  { name: "Kodad",         tag: null,   href: "https://maps.google.com/maps?q=17.005,80.0015"    },
 ]
 
 const socialLinks = [
@@ -90,34 +84,6 @@ export function Footer() {
             </ul>
           </div>
 
-          {/* Branches */}
-          <div>
-            <h3 className="text-xs font-extrabold uppercase tracking-widest text-foreground">Our Branches</h3>
-            <ul className="mt-4 space-y-3">
-              {branches.map((b) => (
-                <li key={b.name}>
-                  <a
-                    href={b.href}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="group flex items-start gap-2 text-sm text-muted-foreground transition-colors hover:text-primary"
-                  >
-                    <MapPin className="mt-0.5 size-3.5 shrink-0 text-primary/60 group-hover:text-primary" />
-                    <span>
-                      {b.name}
-                      {b.tag && (
-                        <span className="ml-1.5 rounded-full bg-primary/10 px-1.5 py-0.5 text-[9px] font-bold text-primary">
-                          {b.tag}
-                        </span>
-                      )}
-                    </span>
-                  </a>
-                </li>
-              ))}
-              <li className="text-[11px] text-muted-foreground/60">Hyderabad, Telangana</li>
-            </ul>
-          </div>
-
           {/* Contact */}
           <div>
             <h3 className="text-xs font-extrabold uppercase tracking-widest text-foreground">Contact</h3>
@@ -169,7 +135,7 @@ export function Footer() {
         {/* Bottom bar */}
         <div className="mt-10 flex flex-col items-center justify-between gap-3 border-t border-border/60 pt-6 sm:flex-row">
           <p className="text-xs text-muted-foreground">
-            &copy; 2026 The New Generation Computers. All rights reserved.
+            &copy; 2014 The New Generation Computers. All rights reserved.
           </p>
           <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
             <Link href="/terms"   className="transition-colors hover:text-primary">Terms & Conditions</Link>

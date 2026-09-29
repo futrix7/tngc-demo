@@ -8,47 +8,29 @@ import { supabase } from "@/lib/supabase"
 const fallbackFaculty = [
   {
     id: "fallback-1",
-    name: "Mr. Mada Eswar Rao",
-    role: "Founder & Director",
+    name: "Mrs. Nadiya",
+    role: "Director",
     branch: "Ramanthapur",
-    qualifications: ["MCA Gold Medalist", "M.Tech"],
+    qualifications: ["MBA", "Degree"],
     description:
-      "With over 24 years of experience in computer education, Mr. Mada Eswar Rao has been instrumental in shaping the careers of thousands of students. His vision and dedication have made TNGC one of the most trusted computer training institutes in Hyderabad.",
-    is_founder: true,
+      "The Director of The New Generation Computers, guiding students with experience, discipline, and a strong training culture.",
+    is_founder: false,
   },
   {
     id: "fallback-2",
-    name: "Mrs. S Sowmya",
-    role: "Manager",
+    name: "Mr G Madhavrao",
+    role: "Coding Trainer",
     branch: "Ramanthapur",
-    qualifications: ["MCA", "5+ Years Experience"],
+    qualifications: ["Coding Trainer"],
     description: null,
     is_founder: false,
   },
   {
     id: "fallback-3",
-    name: "Mr. V Rajesh",
-    role: "Coding Trainer",
-    branch: "Ramanthapur",
-    qualifications: ["B.Tech", "3+ Years Experience"],
-    description: null,
-    is_founder: false,
-  },
-  {
-    id: "fallback-4",
-    name: "Mrs. K Lavanya",
+    name: "Mr M Harish Kumar",
     role: "Computer Trainer",
     branch: "Ramanthapur",
-    qualifications: ["MCA", "4+ Years Experience"],
-    description: null,
-    is_founder: false,
-  },
-  {
-    id: "fallback-5",
-    name: "Mrs. P Soundarya",
-    role: "Accountant",
-    branch: "Ramanthapur",
-    qualifications: ["M.Com", "5+ Years Experience"],
+    qualifications: ["Computer Trainer"],
     description: null,
     is_founder: false,
   },
@@ -148,8 +130,23 @@ export function Staff() {
         }
 
         const rows = uniqueFaculty(data as FacultyRow[])
-        setDirector(rows.find((f) => f.is_founder) ?? rows[0] ?? null)
-        setMembers(rows.filter((f) => !f.is_founder))
+        const preferredDirector =
+          rows.find((f) => /director/i.test(f.role) && /nadiya/i.test(f.name)) ??
+          rows.find((f) => /director/i.test(f.role)) ??
+          rows.find((f) => /nadiya/i.test(f.name)) ??
+          rows.find((f) => !/founder/i.test(f.role)) ??
+          rows[0] ??
+          null
+
+        setDirector(preferredDirector)
+        setMembers(
+          rows.filter(
+            (f) =>
+              !/director/i.test(f.role) &&
+              !/founder/i.test(f.role) &&
+              /trainer/i.test(f.role)
+          )
+        )
       } catch {
         if (active) applyFallback()
       } finally {
@@ -158,8 +155,22 @@ export function Staff() {
     }
 
     function applyFallback() {
-      setDirector(fallbackFaculty.find((f) => f.is_founder) ?? null)
-      setMembers(fallbackFaculty.filter((f) => !f.is_founder))
+      const preferredDirector =
+        fallbackFaculty.find((f) => /director/i.test(f.role) && /nadiya/i.test(f.name)) ??
+        fallbackFaculty.find((f) => /director/i.test(f.role)) ??
+        fallbackFaculty.find((f) => /nadiya/i.test(f.name)) ??
+        fallbackFaculty[0] ??
+        null
+
+      setDirector(preferredDirector)
+      setMembers(
+        fallbackFaculty.filter(
+          (f) =>
+            !/director/i.test(f.role) &&
+            !/founder/i.test(f.role) &&
+            /trainer/i.test(f.role)
+        )
+      )
     }
 
     fetchFaculty()
@@ -178,7 +189,7 @@ export function Staff() {
             viewport={{ once: true }}
             className="text-xs font-bold uppercase tracking-[0.22em] text-indigo-400"
           >
-            Meet the team
+            Meet the trainers
           </motion.p>
           <motion.h2
             initial={{ opacity: 0, y: 12 }}
@@ -187,7 +198,7 @@ export function Staff() {
             transition={{ delay: 0.1 }}
             className="mt-3 text-3xl font-black tracking-tight text-white sm:text-4xl"
           >
-            The people behind your success
+            The trainers guiding your growth
           </motion.h2>
         </div>
 

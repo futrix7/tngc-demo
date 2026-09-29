@@ -16,7 +16,8 @@ const UUID_PATTERN =
 /**
  * A student claims to have paid one or more installments.
  *
- * Files a Pending payment per installment and stops there. Nothing about the
+ * Allocates a custom amount across selected installment balances, files Pending
+ * payment rows and stops there. Nothing about the
  * fee balance changes: the student asserting they paid is not the institute
  * confirming receipt, and the earlier "Pay now" button used to conflate the two,
  * which is how a student could mark themselves paid from a browser. The balance
@@ -43,7 +44,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: auth.error }, { status: auth.status })
   }
 
-  let body: { installmentIds?: unknown; method?: unknown; reference?: unknown; payAll?: unknown }
+  let body: { installmentIds?: unknown; method?: unknown; reference?: unknown; payAll?: unknown; amount?: unknown }
 
   try {
     body = await request.json()
@@ -54,6 +55,11 @@ export async function POST(request: Request) {
   const method = typeof body.method === "string" ? body.method.trim() : "upi"
   const reference = typeof body.reference === "string" ? body.reference.trim() : ""
   const payAll = body.payAll === true
+  const amount = typeof body.amount === "number" ? body.amount : Number.NaN
+
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return NextResponse.json({ error: "Enter a payment amount greater than zero." }, { status: 400 })
+  }
 
   if (!/^(upi|cash|bank)$/.test(method)) {
     return NextResponse.json({ error: "Choose a valid payment method." }, { status: 400 })
@@ -151,6 +157,7 @@ export async function POST(request: Request) {
       p_method: method,
       p_reference: reference,
       p_pay_all: payAll,
+      p_amount: amount,
     })
 
     if (error) {

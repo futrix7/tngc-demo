@@ -31,7 +31,7 @@ export default function PrivacyPage() {
           <section>
             <h2 className="text-lg font-semibold">2. How We Use Your Information</h2>
             <p className="text-sm text-muted-foreground leading-relaxed">
-              Your information is used to manage your enrollment, track attendance and course progress, process fee payments, issue certificates, communicate important notices, and improve our educational services. We do not sell or rent your personal information to third parties.
+              Your information is used to manage your enrollment and course progress, process fee payments, issue certificates, communicate with you, and improve our educational services. We do not sell or rent your personal information to third parties.
             </p>
           </section>
 

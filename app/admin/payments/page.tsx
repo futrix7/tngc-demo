@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -15,7 +15,6 @@ import {
 } from "@/components/ui/table"
 import {
   Search,
-  Filter,
   CheckCircle2,
   Clock,
   XCircle,
@@ -28,6 +27,7 @@ import {
 import { cn } from "@/lib/utils"
 import { ExportDialog } from "@/components/admin/export-dialog"
 import { RecordPaymentSheet } from "@/components/admin/record-payment-sheet"
+import { FilterDialog, type FilterField, type FilterValues } from "@/components/admin/filter-dialog"
 import { supabase } from "@/lib/supabase"
 import {
   BarChart,
@@ -89,89 +89,168 @@ export default function PaymentsPage() {
   const [searchQuery, setSearchQuery] = useState("")
   const [currentPage, setCurrentPage] = useState(1)
   const [exportOpen, setExportOpen] = useState(false)
+  const [exportRows, setExportRows] = useState<Record<string, string | number>[]>([])
+  const [exporting, setExporting] = useState(false)
   const [recordOpen, setRecordOpen] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
+  const [filters, setFilters] = useState({ status: "all", from: "", to: "" })
   const [payments, setPayments] = useState<Payment[]>([])
+  const [totalCount, setTotalCount] = useState(0)
   const [weeklyData, setWeeklyData] = useState<WeeklyDatum[]>([])
   const [loading, setLoading] = useState(true)
+  const requestId = useRef(0)
+  const manualFetchKey = useRef<string | null>(null)
   const rowsPerPage = 8
 
-  useEffect(() => {
-    async function fetchData() {
-      setLoading(true)
+  const fetchPayments = useCallback(async (page: number, search: string, selectedFilters: typeof filters) => {
+    const activeRequest = ++requestId.current
+    setLoading(true)
+    const safeTerm = search.trim().slice(0, 80).replace(/[^\p{L}\p{N}\s@._+-]/gu, "")
+    let query = supabase
+      .from("payments")
+      .select("id, student_name, course_slug, amount, payment_date, method, status, description", { count: "exact" })
+      .order("payment_date", { ascending: false })
+    if (selectedFilters.status !== "all") query = query.eq("status", selectedFilters.status)
+    if (selectedFilters.from) query = query.gte("payment_date", selectedFilters.from)
+    if (selectedFilters.to) query = query.lte("payment_date", selectedFilters.to)
+    if (safeTerm) query = query.or(`student_name.ilike.%${safeTerm}%,id.ilike.%${safeTerm}%,course_slug.ilike.%${safeTerm}%`)
 
-      const { data: paymentsData, error: paymentsError } = await supabase
-        .from("payments")
-        .select("id, student_name, course_slug, amount, payment_date, method, status, description, installment_id, receipt_no")
-        .order("payment_date", { ascending: false })
-        
-      if (paymentsError) {
-        console.error("Error fetching payments:", paymentsError)
-        setLoading(false)
+    const { data: paymentsData, error, count } = await query.range((page - 1) * rowsPerPage, page * rowsPerPage - 1)
+    if (error) {
+      console.error("Error fetching payments:", error)
+      if (activeRequest === requestId.current) setLoading(false)
+      return false
+    }
+    if (activeRequest !== requestId.current) return true
+
+    const slugs = [...new Set((paymentsData ?? []).map((payment) => payment.course_slug).filter(Boolean))] as string[]
+    const { data: coursesData } = slugs.length
+      ? await supabase.from("courses").select("slug, name").in("slug", slugs)
+      : { data: [] as { slug: string; name: string }[] }
+    const courseMap = new Map((coursesData ?? []).map((course) => [course.slug, course.name]))
+    setPayments((paymentsData ?? []).map((payment) => ({
+      id: payment.id,
+      studentName: payment.student_name,
+      course: payment.course_slug ? courseMap.get(payment.course_slug) ?? payment.course_slug : "N/A",
+      amount: `₹${Number(payment.amount).toLocaleString("en-IN")}`,
+      amountRaw: Number(payment.amount),
+      date: new Date(payment.payment_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }),
+      method: payment.method,
+      status: payment.status as PaymentStatus,
+      reference: payment.description ?? "",
+    })))
+    setTotalCount(count ?? 0)
+    setLoading(false)
+    return true
+  }, [rowsPerPage])
+
+  useEffect(() => {
+    const request = { currentPage, searchQuery, filters, reloadKey }
+    const requestKey = JSON.stringify(request)
+    const timer = setTimeout(() => {
+      if (manualFetchKey.current === requestKey) {
+        manualFetchKey.current = null
         return
       }
+      void fetchPayments(currentPage, searchQuery, filters)
+    }, 250)
+    return () => clearTimeout(timer)
+  }, [currentPage, fetchPayments, filters, reloadKey, searchQuery])
 
-      const { data: coursesData } = await supabase
-        .from("courses")
-        .select("slug, name")
-
-      const courseMap = new Map<string, string>()
-      if (coursesData) {
-        coursesData.forEach((c) => courseMap.set(c.slug, c.name))
-      }
-
-      const mapped: Payment[] = (paymentsData || []).map((p) => ({
-        id: p.id,
-        studentName: p.student_name,
-        course: p.course_slug ? (courseMap.get(p.course_slug) || p.course_slug) : "N/A",
-        amount: `₹${Number(p.amount).toLocaleString("en-IN")}`,
-        amountRaw: Number(p.amount),
-        date: new Date(p.payment_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }),
-        method: p.method,
-        status: p.status as PaymentStatus,
-        // The student-facing claim, shown so an admin has the UPI reference in
-        // front of them instead of having to open the database to check it.
-        reference: p.description ?? "",
-      }))
-
-      setPayments(mapped)
-
-      // Revenue is only what has actually been verified. This summed every row
-      // the query returned, so a Pending claim and now a Rejected one both landed
-      // in the chart as income — the dashboard reported money the institute had
-      // not received, and unmarking an installment did not remove it either,
-      // because its row was simply gone rather than reversed.
+  useEffect(() => {
+    async function fetchMonthlyCollections() {
+      const now = new Date()
+      const from = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`
+      const to = now.toISOString().slice(0, 10)
+      const { data } = await supabase
+        .from("payments")
+        .select("payment_date, amount")
+        .eq("status", "Paid")
+        .gte("payment_date", from)
+        .lte("payment_date", to)
+        .order("payment_date", { ascending: true })
+        .limit(1000)
       const weekMap = new Map<number, number>()
-      for (const p of paymentsData || []) {
-        if (p.status !== "Paid") continue
-        const wk = getWeekNumber(p.payment_date)
-        weekMap.set(wk, (weekMap.get(wk) || 0) + Number(p.amount))
+      for (const payment of data ?? []) {
+        const week = getWeekNumber(payment.payment_date)
+        weekMap.set(week, (weekMap.get(week) ?? 0) + Number(payment.amount))
       }
-
-      const weekLabels: Record<number, string> = { 1: "Week 1", 2: "Week 2", 3: "Week 3", 4: "Week 4", 5: "Week 5" }
-      const wd: WeeklyDatum[] = Array.from(weekMap.entries())
-        .sort((a, b) => a[0] - b[0])
-        .map(([wk, amt]) => ({ week: weekLabels[wk] || `Week ${wk}`, amount: amt }))
-      setWeeklyData(wd)
-
-      setLoading(false)
+      setWeeklyData(Array.from(weekMap.entries()).sort((a, b) => a[0] - b[0]).map(([week, amount]) => ({ week: `Week ${week}`, amount })))
     }
-
-    fetchData()
+    fetchMonthlyCollections()
   }, [reloadKey])
 
-  const filteredPayments = payments.filter(
-    (p) =>
-      p.studentName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      p.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      p.course.toLowerCase().includes(searchQuery.toLowerCase())
-  )
+  const totalPages = Math.ceil(totalCount / rowsPerPage)
+  const paginatedPayments = payments
 
-  const totalPages = Math.ceil(filteredPayments.length / rowsPerPage)
-  const paginatedPayments = filteredPayments.slice(
-    (currentPage - 1) * rowsPerPage,
-    currentPage * rowsPerPage
-  )
+  const paymentFilterFields: FilterField[] = [
+    {
+      key: "status",
+      label: "Payment status",
+      type: "select",
+      defaultValue: "all",
+      options: [
+        { value: "all", label: "All statuses" },
+        ...(["Paid", "Pending", "Partial", "Overdue", "Rejected"] as PaymentStatus[]).map((status) => ({ value: status, label: status })),
+      ],
+    },
+    { key: "from", label: "From date", type: "date", defaultValue: "" },
+    { key: "to", label: "To date", type: "date", defaultValue: "" },
+  ]
+
+  async function applyPaymentFilters(values: FilterValues) {
+    const nextFilters = { status: values.status || "all", from: values.from || "", to: values.to || "" }
+    const requestKey = JSON.stringify({ currentPage: 1, searchQuery, filters: nextFilters, reloadKey })
+    manualFetchKey.current = requestKey
+    setCurrentPage(1)
+    setFilters(nextFilters)
+    if (!await fetchPayments(1, searchQuery, nextFilters)) throw new Error("Payment fetch failed")
+  }
+
+  async function handleExport() {
+    setExporting(true)
+    const safeTerm = searchQuery.trim().slice(0, 80).replace(/[^\p{L}\p{N}\s@._+-]/gu, "")
+    const rows: { id: string; student_name: string; course_slug: string | null; amount: number; payment_date: string; method: string; status: string }[] = []
+    let offset = 0
+
+    try {
+      while (true) {
+        let query = supabase
+          .from("payments")
+          .select("id, student_name, course_slug, amount, payment_date, method, status")
+          .order("payment_date", { ascending: false })
+        if (filters.status !== "all") query = query.eq("status", filters.status)
+        if (filters.from) query = query.gte("payment_date", filters.from)
+        if (filters.to) query = query.lte("payment_date", filters.to)
+        if (safeTerm) query = query.or(`student_name.ilike.%${safeTerm}%,id.ilike.%${safeTerm}%,course_slug.ilike.%${safeTerm}%`)
+        const { data, error } = await query.range(offset, offset + 999)
+        if (error) throw error
+        rows.push(...(data ?? []))
+        if (!data || data.length < 1000) break
+        offset += 1000
+      }
+
+      const slugs = [...new Set(rows.map((row) => row.course_slug).filter(Boolean))] as string[]
+      const { data: courseRows } = slugs.length
+        ? await supabase.from("courses").select("slug, name").in("slug", slugs)
+        : { data: [] as { slug: string; name: string }[] }
+      const courseNames = new Map((courseRows ?? []).map((row) => [row.slug, row.name]))
+      setExportRows(rows.map((row) => ({
+        ID: row.id,
+        Student: row.student_name,
+        Course: row.course_slug ? courseNames.get(row.course_slug) ?? row.course_slug : "N/A",
+        Amount: `₹${Number(row.amount).toLocaleString("en-IN")}`,
+        Date: new Date(row.payment_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }),
+        Method: row.method,
+        Status: row.status,
+      })))
+      setExportOpen(true)
+    } catch (error) {
+      console.error("Error exporting filtered payments:", error)
+    } finally {
+      setExporting(false)
+    }
+  }
 
   if (loading) {
     return (
@@ -189,9 +268,9 @@ export default function PaymentsPage() {
           <p className="text-xs text-muted-foreground">Payment history and records</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => setExportOpen(true)}>
+          <Button variant="outline" size="sm" onClick={handleExport} disabled={exporting}>
             <Download className="mr-2 h-4 w-4" />
-            Export
+            {exporting ? "Preparing..." : "Export"}
           </Button>
           <Button size="sm" onClick={() => setRecordOpen(true)}>
             <Plus className="mr-2 h-4 w-4" />
@@ -227,15 +306,15 @@ export default function PaymentsPage() {
             <div>
               <CardTitle>Payment History</CardTitle>
               <CardDescription>
-                Showing {paginatedPayments.length} of {filteredPayments.length} payments
+                Showing {paginatedPayments.length} of {totalCount.toLocaleString()} matching payments
               </CardDescription>
             </div>
             <div className="flex items-center gap-2">
-              <div className="relative">
+              <div className="relative w-full sm:w-auto">
                 <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                 <Input
                   placeholder="Search payments..."
-                  className="pl-8 w-64"
+                  className="w-full pl-8 sm:w-72"
                   value={searchQuery}
                   onChange={(e) => {
                     setSearchQuery(e.target.value)
@@ -243,10 +322,14 @@ export default function PaymentsPage() {
                   }}
                 />
               </div>
-              <Button variant="outline" size="sm">
-                <Filter className="mr-2 h-4 w-4" />
-                Date Range
-              </Button>
+              <FilterDialog
+                title="Filter payments"
+                description="Choose a payment status and payment-date range."
+                fields={paymentFilterFields}
+                values={filters}
+                onApply={applyPaymentFilters}
+                onClear={applyPaymentFilters}
+              />
             </div>
           </div>
         </CardHeader>
@@ -326,15 +409,7 @@ export default function PaymentsPage() {
       <ExportDialog
         open={exportOpen}
         onOpenChange={setExportOpen}
-        rows={payments.map((p) => ({
-          ID: p.id,
-          Student: p.studentName,
-          Course: p.course,
-          Amount: p.amount,
-          Date: p.date,
-          Method: p.method,
-          Status: p.status,
-        }))}
+        rows={exportRows}
         filename="payments-report"
       />
       <RecordPaymentSheet

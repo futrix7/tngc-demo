@@ -12,26 +12,6 @@ interface Course {
   duration: string
 }
 
-/* ── Hardcoded fallback — always shown when Supabase is unreachable ── */
-const FALLBACK_COURSES: Course[] = [
-  { slug: "ms-word",            name: "MS Word",              duration: "1 Month"  },
-  { slug: "ms-excel",           name: "MS Excel",             duration: "1 Month"  },
-  { slug: "ms-powerpoint",      name: "MS PowerPoint",        duration: "1 Month"  },
-  { slug: "internet-basics",    name: "Internet & Email",     duration: "2 Weeks"  },
-  { slug: "tally-basic",        name: "Tally Basic",          duration: "1 Month"  },
-  { slug: "photoshop",          name: "Photoshop",            duration: "1 Month"  },
-  { slug: "canva",              name: "Canva Design",         duration: "2 Weeks"  },
-  { slug: "python-basics",      name: "Python Basics",        duration: "6 Weeks"  },
-  { slug: "html-css",           name: "HTML & CSS",           duration: "6 Weeks"  },
-  { slug: "javascript-basics",  name: "JavaScript Basics",    duration: "6 Weeks"  },
-  { slug: "coreldraw",          name: "CorelDRAW",            duration: "1 Month"  },
-  { slug: "typing",             name: "Typing (Eng/Tel)",     duration: "1 Month"  },
-  { slug: "data-entry",         name: "Data Entry",           duration: "2 Weeks"  },
-  { slug: "gst-filing",         name: "GST & E-Filing",       duration: "3 Weeks"  },
-  { slug: "youtube-creation",   name: "YouTube Creation",     duration: "2 Weeks"  },
-  { slug: "social-media",       name: "Social Media Mktg",    duration: "1 Month"  },
-]
-
 /* Rotating colour classes for pills */
 const PILL_COLORS = [
   "border-indigo-400/40 bg-indigo-500/8 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-500/16",
@@ -59,7 +39,7 @@ const pill = {
 } as const
 
 export function ShortTermCourses() {
-  const [courses, setCourses] = useState<Course[]>(FALLBACK_COURSES)
+  const [courses, setCourses] = useState<Course[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -74,9 +54,9 @@ export function ShortTermCourses() {
           .order("created_at")
 
         if (!active) return
-        if (!error && data && data.length > 0) setCourses(data as Course[])
+        if (!error) setCourses(data ?? [])
       } catch {
-        /* keep fallback */
+        if (active) setCourses([])
       } finally {
         if (active) setLoading(false)
       }
@@ -132,6 +112,8 @@ export function ShortTermCourses() {
               <div key={i} className="h-10 w-32 animate-pulse rounded-2xl border border-border/60 bg-muted/50" />
             ))}
           </div>
+        ) : courses.length === 0 ? (
+          <p className="mt-10 text-center text-sm text-muted-foreground">No short-term courses are available right now.</p>
         ) : (
           <motion.div
             variants={container}

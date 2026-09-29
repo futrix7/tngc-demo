@@ -5,7 +5,7 @@ import Link from "next/link"
 import { usePathname } from "next/navigation"
 import {
   Menu, Phone, Sun, Moon, Monitor,
-  LogIn, Sparkles, GraduationCap, ChevronRight,
+  LogIn, GraduationCap, ChevronRight,
 } from "lucide-react"
 import { useTheme } from "@/components/theme-provider"
 import { buttonVariants } from "@/components/ui/button"
@@ -194,7 +194,7 @@ export function Header() {
             Login
           </Link>
           <Link
-            href="/auth/user/register"
+            href="/#contact"
             className={cn(
               "inline-flex h-11 items-center gap-2 rounded-xl px-7 text-[15px] font-bold shadow-xl",
               "transition-all duration-200 hover:scale-[1.04]",
@@ -203,8 +203,8 @@ export function Header() {
                 : cn(buttonVariants(), "h-11 px-7 shadow-primary/25")
             )}
           >
-            <Sparkles className="size-4" />
-            Register Free
+            <Phone className="size-4" />
+            Enquire Now
           </Link>
         </div>
 
@@ -298,14 +298,14 @@ export function Header() {
                     Login
                   </Link>
                   <Link
-                    href="/auth/user/register"
+                    href="/#contact"
                     className={cn(
                       buttonVariants(),
                       "h-12 justify-center gap-2 rounded-xl text-[15px] font-bold shadow-lg shadow-primary/20"
                     )}
                   >
-                    <Sparkles className="size-5" />
-                    Register
+                    <Phone className="size-5" />
+                    Enquire
                   </Link>
                 </div>
               </div>

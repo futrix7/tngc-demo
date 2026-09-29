@@ -1,4 +1,15 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+DO $$
+BEGIN
+  DROP TABLE IF EXISTS public.announcements CASCADE;
+  DROP TABLE IF EXISTS public.attendance CASCADE;
+  DROP TABLE IF EXISTS public.activity_log CASCADE;
+  DROP TABLE IF EXISTS public.events CASCADE;
+  DROP TABLE IF EXISTS public.pending_tasks CASCADE;
+END $$;
 
 DO $$
 DECLARE
@@ -14,11 +25,9 @@ BEGIN
     'gender_type=male|female|other',
     'teacher_status=Active|On Leave',
     'payment_status=Paid|Pending|Partial|Overdue',
-    'attendance_status=Present|Absent|Late|Leave',
     'certificate_status=Issued|Pending|Rejected|Processing|Requested',
     'certificate_type=Completion|Proficiency|Module',
     'video_status=Published|Draft|Processing',
-    'announcement_priority=high|medium|low',
     'transaction_type=income|expense',
     'qualification_type=B.Tech|M.Tech|MCA|M.Sc|PhD|Others',
     'specialization_type=Java|Python|Web Development|Database|Networking|MS-Office',
@@ -64,18 +73,6 @@ BEGIN
   END IF;
 END $$;
 
-CREATE TABLE IF NOT EXISTS branches (
-  id          TEXT PRIMARY KEY,
-  name        TEXT NOT NULL,
-  tag         TEXT,
-  address     TEXT NOT NULL,
-  city        TEXT NOT NULL,
-  note        TEXT,
-  is_primary  BOOLEAN DEFAULT FALSE,
-  created_at  TIMESTAMPTZ DEFAULT NOW(),
-  updated_at  TIMESTAMPTZ DEFAULT NOW()
-);
-
 CREATE TABLE IF NOT EXISTS courses (
   id                    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   slug                  TEXT UNIQUE NOT NULL,
@@ -110,12 +107,11 @@ CREATE TABLE IF NOT EXISTS students (
   id                      TEXT PRIMARY KEY,
   user_id                 UUID REFERENCES auth.users(id) ON DELETE SET NULL,
   full_name               TEXT NOT NULL,
-  email                   TEXT NOT NULL,
+  email                   TEXT,
   phone                   TEXT NOT NULL,
   date_of_birth           DATE,
   gender                  gender_type,
   address                 TEXT,
-  branch_id               TEXT REFERENCES branches(id) ON DELETE SET NULL,
   course_slug             TEXT REFERENCES courses(slug) ON DELETE SET NULL,
   enrollment_date         DATE DEFAULT CURRENT_DATE,
   batch_time              TEXT,
@@ -131,6 +127,46 @@ CREATE TABLE IF NOT EXISTS students (
   updated_at              TIMESTAMPTZ DEFAULT NOW()
 );
 
+ALTER TABLE students ALTER COLUMN email DROP NOT NULL;
+
+-- Migrate linked student accounts once: Auth uses E.164 phone identifiers,
+-- while the student table keeps the local 10-digit number used by the portal.
+WITH raw_student_numbers AS (
+  SELECT user_id, regexp_replace(phone, '[^0-9]', '', 'g') AS digits
+    FROM students
+   WHERE user_id IS NOT NULL
+), normalized_student_numbers AS (
+  SELECT user_id,
+         CASE WHEN digits ~ '^91[0-9]{10}$' THEN right(digits, 10) ELSE digits END AS national_number
+    FROM raw_student_numbers
+), unique_student_numbers AS (
+  SELECT user_id,
+         national_number,
+         count(*) OVER (PARTITION BY national_number) AS student_count
+    FROM normalized_student_numbers
+   WHERE national_number ~ '^[0-9]{10}$'
+)
+UPDATE auth.users AS auth_user
+   SET phone = '+91' || student_number.national_number,
+       phone_confirmed_at = COALESCE(auth_user.phone_confirmed_at, NOW()),
+       encrypted_password = crypt(student_number.national_number, gen_salt('bf')),
+       raw_user_meta_data = COALESCE(auth_user.raw_user_meta_data, '{}'::jsonb)
+         || jsonb_build_object('phone', student_number.national_number),
+       raw_app_meta_data = COALESCE(auth_user.raw_app_meta_data, '{}'::jsonb)
+         || jsonb_build_object('tngc_phone_password_migrated', true),
+       updated_at = NOW()
+  FROM unique_student_numbers AS student_number
+ WHERE auth_user.id = student_number.user_id
+   AND student_number.student_count = 1
+   AND COALESCE(auth_user.raw_app_meta_data ->> 'tngc_phone_password_migrated', 'false') <> 'true'
+   AND NOT EXISTS (
+     SELECT 1
+       FROM auth.users AS other_user
+      WHERE other_user.id <> auth_user.id
+        AND regexp_replace(COALESCE(other_user.phone, ''), '[^0-9]', '', 'g')
+            IN (student_number.national_number, '91' || student_number.national_number)
+   );
+
 CREATE TABLE IF NOT EXISTS teachers (
   id             TEXT PRIMARY KEY,
   user_id        UUID REFERENCES auth.users(id) ON DELETE SET NULL,
@@ -138,7 +174,6 @@ CREATE TABLE IF NOT EXISTS teachers (
   email          TEXT NOT NULL,
   phone          TEXT NOT NULL,
   role           TEXT NOT NULL,
-  branch_id      TEXT REFERENCES branches(id) ON DELETE SET NULL,
   subjects       TEXT[] DEFAULT '{}',
   experience     INTEGER DEFAULT 0,
   qualification  qualification_type,
@@ -156,7 +191,6 @@ CREATE TABLE IF NOT EXISTS admins (
   full_name      TEXT NOT NULL,
   email          TEXT NOT NULL,
   phone          TEXT,
-  branch_id      TEXT REFERENCES branches(id) ON DELETE SET NULL,
   role           TEXT DEFAULT 'Administrator',
   bio            TEXT,
   profile_photo  TEXT,
@@ -220,27 +254,11 @@ CREATE TABLE IF NOT EXISTS payments (
   receipt_no    TEXT,
   description   TEXT,
 
-  branch_id     TEXT REFERENCES branches(id) ON DELETE SET NULL,
-
   installment_id uuid REFERENCES fee_installments(id) ON DELETE SET NULL,
 
   verified_at  timestamptz,
   verified_by  text,
   created_at    TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS attendance (
-  id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  student_id   TEXT REFERENCES students(id) ON DELETE CASCADE,
-  date         DATE NOT NULL,
-  time_in      TIME,
-  time_out     TIME,
-  hours        DECIMAL(3,1) DEFAULT 0,
-  status       attendance_status NOT NULL,
-  course_slug  TEXT REFERENCES courses(slug) ON DELETE SET NULL,
-  branch_id    TEXT REFERENCES branches(id) ON DELETE SET NULL,
-  created_at   TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(student_id, date)
 );
 
 CREATE TABLE IF NOT EXISTS certificates (
@@ -253,7 +271,6 @@ CREATE TABLE IF NOT EXISTS certificates (
   issued_date    DATE,
   credential_id  TEXT,
   issued_by      TEXT,
-  branch_id      TEXT REFERENCES branches(id) ON DELETE SET NULL,
   status         certificate_status DEFAULT 'Pending',
   created_at     TIMESTAMPTZ DEFAULT NOW(),
   updated_at     TIMESTAMPTZ DEFAULT NOW()
@@ -273,20 +290,6 @@ CREATE TABLE IF NOT EXISTS videos (
   updated_at    TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS announcements (
-  id              TEXT PRIMARY KEY,
-  title           TEXT NOT NULL,
-  message         TEXT NOT NULL,
-  priority        announcement_priority DEFAULT 'medium',
-  target          TEXT DEFAULT 'All Students',
-  author_id       TEXT REFERENCES teachers(id) ON DELETE SET NULL,
-  author_name     TEXT,
-  published_date  DATE DEFAULT CURRENT_DATE,
-  pinned          BOOLEAN DEFAULT FALSE,
-  created_at      TIMESTAMPTZ DEFAULT NOW(),
-  updated_at      TIMESTAMPTZ DEFAULT NOW()
-);
-
 CREATE TABLE IF NOT EXISTS transactions (
   id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   date         DATE NOT NULL,
@@ -294,32 +297,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   category     TEXT NOT NULL,
   amount       NUMERIC(10,2) NOT NULL,
   type         transaction_type NOT NULL,
-  branch_id    TEXT REFERENCES branches(id) ON DELETE SET NULL,
   created_at   TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS activity_log (
-  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  admin_id    UUID REFERENCES admins(id) ON DELETE SET NULL,
-  action      TEXT NOT NULL,
-  type        TEXT NOT NULL,
-  timestamp   TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS events (
-  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  name        TEXT NOT NULL,
-  date        DATE NOT NULL,
-  type        TEXT NOT NULL,
-  created_at  TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS pending_tasks (
-  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  task        TEXT NOT NULL,
-  priority    TEXT DEFAULT 'medium',
-  completed   BOOLEAN DEFAULT FALSE,
-  created_at  TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS faculty (
@@ -342,39 +320,28 @@ CREATE TABLE IF NOT EXISTS rate_limit_log (
 COMMENT ON TABLE public.rate_limit_log IS
   'Throttling log for finance PIN and installment payment submission; authentication routes do not use it.';
 
-ALTER TABLE payments ADD COLUMN IF NOT EXISTS branch_id TEXT REFERENCES branches(id) ON DELETE SET NULL;
-
 ALTER TABLE students ADD COLUMN IF NOT EXISTS present_status         TEXT;
 ALTER TABLE students ADD COLUMN IF NOT EXISTS full_name_as_signature TEXT;
 
-UPDATE payments p
-   SET branch_id = s.branch_id
-  FROM students s
- WHERE s.id = p.student_id
-   AND p.branch_id IS NULL;
-
-CREATE INDEX IF NOT EXISTS idx_students_branch       ON students(branch_id);
 CREATE INDEX IF NOT EXISTS idx_students_course       ON students(course_slug);
 CREATE INDEX IF NOT EXISTS idx_students_status       ON students(status);
+CREATE INDEX IF NOT EXISTS idx_students_name_trgm    ON students USING GIN (full_name gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_students_email_trgm   ON students USING GIN (email gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_students_phone_trgm   ON students USING GIN (phone gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_students_id_trgm      ON students USING GIN (id gin_trgm_ops);
 
 CREATE INDEX IF NOT EXISTS idx_students_user_id      ON students(user_id);
-CREATE INDEX IF NOT EXISTS idx_teachers_branch       ON teachers(branch_id);
 
 CREATE INDEX IF NOT EXISTS idx_admins_user_id        ON admins(user_id);
 CREATE INDEX IF NOT EXISTS idx_fees_student          ON fees(student_id);
 CREATE INDEX IF NOT EXISTS idx_payments_student      ON payments(student_id);
 CREATE INDEX IF NOT EXISTS idx_payments_date         ON payments(payment_date);
-CREATE INDEX IF NOT EXISTS idx_payments_branch       ON payments(branch_id);
-CREATE INDEX IF NOT EXISTS idx_attendance_student    ON attendance(student_id);
-CREATE INDEX IF NOT EXISTS idx_attendance_date       ON attendance(date);
 CREATE INDEX IF NOT EXISTS idx_certificates_student  ON certificates(student_id);
 CREATE INDEX IF NOT EXISTS idx_videos_course         ON videos(course_slug);
-CREATE INDEX IF NOT EXISTS idx_announcements_pinned  ON announcements(pinned);
 CREATE INDEX IF NOT EXISTS idx_transactions_date     ON transactions(date);
 CREATE INDEX IF NOT EXISTS idx_transactions_type     ON transactions(type);
 CREATE INDEX IF NOT EXISTS idx_rate_limit_log_scope  ON rate_limit_log(scope, created_at);
 
-ALTER TABLE branches          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE courses           ENABLE ROW LEVEL SECURITY;
 ALTER TABLE students          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE teachers          ENABLE ROW LEVEL SECURITY;
@@ -383,14 +350,9 @@ ALTER TABLE fees              ENABLE ROW LEVEL SECURITY;
 ALTER TABLE fee_installments  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE fee_extras        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE payments          ENABLE ROW LEVEL SECURITY;
-ALTER TABLE attendance        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE certificates      ENABLE ROW LEVEL SECURITY;
 ALTER TABLE videos            ENABLE ROW LEVEL SECURITY;
-ALTER TABLE announcements     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE transactions      ENABLE ROW LEVEL SECURITY;
-ALTER TABLE activity_log      ENABLE ROW LEVEL SECURITY;
-ALTER TABLE events            ENABLE ROW LEVEL SECURITY;
-ALTER TABLE pending_tasks     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE faculty           ENABLE ROW LEVEL SECURITY;
 ALTER TABLE rate_limit_log    ENABLE ROW LEVEL SECURITY;
 
@@ -446,8 +408,8 @@ DO $$
 DECLARE
   t text;
   target_tables text[] := ARRAY[
-    'branches', 'courses', 'students', 'teachers', 'admins', 'fees',
-    'certificates', 'announcements', 'videos'
+    'courses', 'students', 'teachers', 'admins', 'fees',
+    'certificates', 'videos'
   ];
 BEGIN
   FOREACH t IN ARRAY target_tables LOOP
@@ -548,8 +510,8 @@ DECLARE
   v_due date;
   v_new_id uuid;
 BEGIN
-  IF p_count IS NULL OR p_count < 1 OR p_count > 12 THEN
-    RAISE EXCEPTION 'installment count must be between 1 and 12' USING ERRCODE = '22023';
+  IF p_count IS NULL OR p_count < 1 OR p_count > 3 THEN
+    RAISE EXCEPTION 'installment count must be between 1 and 3' USING ERRCODE = '22023';
   END IF;
 
   IF p_total IS NULL OR p_total < 0 THEN
@@ -581,13 +543,17 @@ END;
 $$;
 
 COMMENT ON FUNCTION public.create_fee_schedule(uuid, numeric, integer, date) IS
-  'Splits a course fee into dated installments whose amounts sum to exactly the total. service_role only.';
+  'Splits a course fee into up to 3 dated installments whose amounts sum to exactly the total. The student can still pay a custom amount against the remaining balance without being locked into a fixed half split. service_role only.';
 
 REVOKE ALL ON FUNCTION public.create_fee_schedule(uuid, numeric, integer, date) FROM PUBLIC;
 
 DROP FUNCTION IF EXISTS public.register_student(
   uuid, text, text, text, text, text, text, text[], text, text, text, text,
   integer[], integer
+);
+DROP FUNCTION IF EXISTS public.register_student(
+  uuid, text, text, text, text, text, text, text[], text, text, text, text,
+  integer[], integer, numeric
 );
 
 CREATE OR REPLACE FUNCTION public.register_student(
@@ -597,7 +563,6 @@ CREATE OR REPLACE FUNCTION public.register_student(
   p_phone text,
   p_father_name text,
   p_father_phone text,
-  p_branch_id text,
   p_course_slugs text[],
   p_present_status text,
   p_signature text,
@@ -605,7 +570,8 @@ CREATE OR REPLACE FUNCTION public.register_student(
   p_payment_description text,
   p_paid_installment_nos integer[] DEFAULT ARRAY[1]::integer[],
   p_installment_count integer DEFAULT 3,
-  p_custom_payment_amount numeric DEFAULT NULL
+  p_custom_payment_amount numeric DEFAULT NULL,
+  p_total_fee_override numeric DEFAULT NULL
 )
 RETURNS TABLE (student_id text, payment_id text, total_fee numeric)
 LANGUAGE plpgsql
@@ -636,6 +602,12 @@ BEGIN
     RAISE EXCEPTION 'at least one course must be selected' USING ERRCODE = '22023';
   END IF;
 
+  IF p_total_fee_override IS NOT NULL
+     AND (p_total_fee_override <= 0 OR array_length(p_course_slugs, 1) <> 1) THEN
+    RAISE EXCEPTION 'a custom total fee must be positive and apply to exactly one course'
+      USING ERRCODE = '22023';
+  END IF;
+
   IF p_signature IS NULL OR p_full_name IS NULL
      OR btrim(p_signature) = ''
      OR lower(btrim(p_signature)) <> lower(btrim(p_full_name)) THEN
@@ -648,10 +620,10 @@ BEGIN
 
   INSERT INTO students (
     id, user_id, full_name, email, phone, father_name, father_phone,
-    branch_id, course_slug, status, present_status, full_name_as_signature
+    course_slug, status, present_status, full_name_as_signature
   ) VALUES (
     v_student_id, p_user_id, p_full_name, p_email, p_phone, p_father_name,
-    NULLIF(p_father_phone, ''), NULLIF(p_branch_id, ''), v_primary_course,
+    NULLIF(p_father_phone, ''), v_primary_course,
     'Active', p_present_status, p_signature
   );
 
@@ -659,6 +631,9 @@ BEGIN
 
     SELECT c.fee_numeric INTO v_course_fee FROM courses c WHERE c.slug = v_course;
     v_course_fee := COALESCE(v_course_fee, 0);
+    IF p_total_fee_override IS NOT NULL THEN
+      v_course_fee := p_total_fee_override;
+    END IF;
     v_total := v_total + v_course_fee;
 
     INSERT INTO fees (student_id, course_slug, total_fee, paid_amount, pending_amount)
@@ -709,12 +684,11 @@ BEGIN
 
         INSERT INTO payments (
           id, student_id, student_name, course_slug, amount, payment_date,
-          method, status, description, branch_id, installment_id, receipt_no
+          method, status, description, installment_id, receipt_no
         ) VALUES (
           v_payment_id, v_student_id, p_full_name, v_course, v_payment_amount, v_today,
           COALESCE(NULLIF(p_payment_method, ''), 'upi'), 'Pending',
           p_payment_description,
-          NULLIF(p_branch_id, ''),
           v_inst.id,
           v_receipt
         );
@@ -745,12 +719,11 @@ BEGIN
 
         INSERT INTO payments (
           id, student_id, student_name, course_slug, amount, payment_date,
-          method, status, description, branch_id, installment_id, receipt_no
+          method, status, description, installment_id, receipt_no
         ) VALUES (
           v_payment_id, v_student_id, p_full_name, v_course, v_inst.amount, v_today,
           COALESCE(NULLIF(p_payment_method, ''), 'upi'), 'Pending',
           p_payment_description,
-          NULLIF(p_branch_id, ''),
           v_inst.id,
           v_receipt
         );
@@ -764,28 +737,36 @@ $$;
 
 COMMENT ON FUNCTION public.register_student(
   uuid, text, text, text, text, text, text, text[], text, text, text, text,
-  integer[], integer, numeric
+  integer[], integer, numeric, numeric
 ) IS
-  'Creates a student, fee rows and schedules, and Pending payment claims for chosen installments or a custom amount allocated across the schedule. Prices courses from courses.fee_numeric. service_role only.';
+  'Creates a student, fee rows and schedules, and Pending payment claims for chosen installments or a custom amount allocated across the schedule. Supports an admin-set total fee override for one course. service_role only.';
 
 REVOKE ALL ON FUNCTION public.register_student(
   uuid, text, text, text, text, text, text, text[], text, text, text, text,
-  integer[], integer, numeric
+  integer[], integer, numeric, numeric
 ) FROM PUBLIC;
 
 GRANT EXECUTE ON FUNCTION public.register_student(
   uuid, text, text, text, text, text, text, text[], text, text, text, text,
-  integer[], integer, numeric
+  integer[], integer, numeric, numeric
 ) TO service_role;
 
 ALTER FUNCTION public.register_student(
   uuid, text, text, text, text, text, text, text[], text, text, text, text,
-  integer[], integer, numeric
+  integer[], integer, numeric, numeric
 ) OWNER TO postgres;
+
+DROP FUNCTION IF EXISTS public.enroll_student_in_course(uuid, text);
+DROP FUNCTION IF EXISTS public.enroll_student_in_course(uuid, text, numeric);
 
 CREATE OR REPLACE FUNCTION public.enroll_student_in_course(
   p_user_id uuid,
-  p_course_slug text
+  p_course_slug text,
+  p_total_fee_override numeric DEFAULT NULL,
+  p_initial_payment_amount numeric DEFAULT 0,
+  p_payment_method text DEFAULT 'upi',
+  p_payment_reference text DEFAULT '',
+  p_verified_by text DEFAULT ''
 )
 RETURNS TABLE (fee_id uuid, course_slug text, total_fee numeric)
 LANGUAGE plpgsql
@@ -797,6 +778,11 @@ DECLARE
   v_student students%ROWTYPE;
   v_course courses%ROWTYPE;
   v_fee_id uuid;
+  v_total_fee numeric;
+  v_initial_amount numeric := COALESCE(p_initial_payment_amount, 0);
+  v_first_installment fee_installments%ROWTYPE;
+  v_payment_id text;
+  v_receipt_no text;
 BEGIN
   SELECT * INTO v_student
     FROM students
@@ -815,6 +801,13 @@ BEGIN
     RAISE EXCEPTION 'course is not available for enrollment' USING ERRCODE = '22023';
   END IF;
 
+  IF p_total_fee_override IS NOT NULL AND p_total_fee_override <= 0 THEN
+    RAISE EXCEPTION 'custom course fee must be greater than zero' USING ERRCODE = '22023';
+  END IF;
+  IF v_initial_amount < 0 THEN
+    RAISE EXCEPTION 'initial payment cannot be negative' USING ERRCODE = '22023';
+  END IF;
+
   IF EXISTS (
     SELECT 1 FROM fees f
      WHERE f.student_id = v_student.id AND f.course_slug = v_course.slug
@@ -822,25 +815,64 @@ BEGIN
     RAISE EXCEPTION 'already enrolled in this course' USING ERRCODE = '22023';
   END IF;
 
+  v_total_fee := COALESCE(p_total_fee_override, v_course.fee_numeric);
+
   INSERT INTO fees (student_id, course_slug, total_fee, paid_amount, pending_amount)
-  VALUES (v_student.id, v_course.slug, v_course.fee_numeric, 0, v_course.fee_numeric)
+  VALUES (v_student.id, v_course.slug, v_total_fee, 0, v_total_fee)
   RETURNING id INTO v_fee_id;
 
-  PERFORM * FROM public.create_fee_schedule(v_fee_id, v_course.fee_numeric, 3, CURRENT_DATE);
+  PERFORM * FROM public.create_fee_schedule(v_fee_id, v_total_fee, 3, CURRENT_DATE);
+
+  IF v_initial_amount > 0 THEN
+    SELECT * INTO v_first_installment
+      FROM fee_installments
+     WHERE fee_id = v_fee_id AND installment_no = 1
+     FOR UPDATE;
+
+    IF NOT FOUND OR v_initial_amount > v_first_installment.amount THEN
+      RAISE EXCEPTION 'initial payment cannot exceed the first installment balance' USING ERRCODE = '22023';
+    END IF;
+
+    IF COALESCE(p_payment_method, '') NOT IN ('upi', 'cash', 'bank') THEN
+      RAISE EXCEPTION 'choose a valid payment method' USING ERRCODE = '22023';
+    END IF;
+
+    v_payment_id := public.next_payment_code(EXTRACT(YEAR FROM CURRENT_DATE)::integer);
+    v_receipt_no := v_payment_id;
+
+    INSERT INTO payments (
+      id, student_id, student_name, course_slug, amount, payment_date,
+      method, status, description, installment_id, receipt_no,
+      verified_at, verified_by
+    ) VALUES (
+      v_payment_id, v_student.id, v_student.full_name, v_course.slug,
+      v_initial_amount, CURRENT_DATE, p_payment_method, 'Paid',
+      NULLIF(p_payment_reference, ''),
+      v_first_installment.id, v_receipt_no, NOW(), NULLIF(p_verified_by, '')
+    );
+
+    UPDATE fee_installments
+       SET status = CASE WHEN v_initial_amount >= v_first_installment.amount THEN 'Paid' ELSE 'Partial' END,
+           paid_date = CURRENT_DATE,
+           verified_at = NOW()
+     WHERE id = v_first_installment.id;
+
+    PERFORM public.apply_fee_delta(v_fee_id, v_initial_amount, -v_initial_amount);
+  END IF;
 
   fee_id := v_fee_id;
   course_slug := v_course.slug;
-  total_fee := v_course.fee_numeric;
+  total_fee := v_total_fee;
   RETURN NEXT;
 END;
 $$;
 
-COMMENT ON FUNCTION public.enroll_student_in_course(uuid, text) IS
-  'Adds an active course to an existing student and creates its fee plus three-installment schedule atomically. service_role only.';
+COMMENT ON FUNCTION public.enroll_student_in_course(uuid, text, numeric, numeric, text, text, text) IS
+  'Adds an active course to an existing student, creates an installment schedule capped at 3 splits, and optionally records a verified custom payment against the remaining balance atomically. service_role only.';
 
-REVOKE ALL ON FUNCTION public.enroll_student_in_course(uuid, text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.enroll_student_in_course(uuid, text) TO service_role;
-ALTER FUNCTION public.enroll_student_in_course(uuid, text) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.enroll_student_in_course(uuid, text, numeric, numeric, text, text, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.enroll_student_in_course(uuid, text, numeric, numeric, text, text, text) TO service_role;
+ALTER FUNCTION public.enroll_student_in_course(uuid, text, numeric, numeric, text, text, text) OWNER TO postgres;
 
 CREATE OR REPLACE FUNCTION public.guard_student_columns()
 RETURNS trigger
@@ -864,11 +896,6 @@ BEGIN
 
   IF NEW.course_slug IS DISTINCT FROM OLD.course_slug THEN
     RAISE EXCEPTION 'course assignment is managed by the institute and cannot be changed'
-      USING ERRCODE = '42501';
-  END IF;
-
-  IF NEW.branch_id IS DISTINCT FROM OLD.branch_id THEN
-    RAISE EXCEPTION 'branch assignment is managed by the institute and cannot be changed'
       USING ERRCODE = '42501';
   END IF;
 
@@ -984,6 +1011,7 @@ COMMENT ON FUNCTION public.apply_fee_delta(uuid, numeric, numeric) IS
 REVOKE ALL ON FUNCTION public.apply_fee_delta(uuid, numeric, numeric) FROM PUBLIC;
 
 DROP FUNCTION IF EXISTS public.submit_installment_payments(uuid, uuid[], text, text);
+DROP FUNCTION IF EXISTS public.submit_installment_payments(uuid, uuid[], text, text, boolean);
 DROP FUNCTION IF EXISTS public.verify_installment_payments(text[], boolean, text);
 DROP FUNCTION IF EXISTS public.unmark_installment(uuid, text);
 
@@ -992,7 +1020,8 @@ CREATE OR REPLACE FUNCTION public.submit_installment_payments(
   p_installment_ids uuid[],
   p_method text,
   p_reference text,
-  p_pay_all boolean DEFAULT false
+  p_pay_all boolean DEFAULT false,
+  p_amount numeric DEFAULT NULL
 )
 RETURNS TABLE (payment_id text, amount numeric, installment_label text)
 LANGUAGE plpgsql
@@ -1004,10 +1033,11 @@ DECLARE
   v_student students%ROWTYPE;
   v_inst fee_installments%ROWTYPE;
   v_id uuid;
-  v_total numeric := 0;
   v_group text;
   v_paid numeric;
   v_balance numeric;
+  v_remaining numeric := p_amount;
+  v_claim_amount numeric;
 BEGIN
   SELECT * INTO v_student FROM students WHERE user_id = p_user_id;
 
@@ -1017,6 +1047,19 @@ BEGIN
 
   IF p_installment_ids IS NULL OR array_length(p_installment_ids, 1) IS NULL THEN
     RAISE EXCEPTION 'choose at least one installment' USING ERRCODE = '22023';
+  END IF;
+
+  IF p_amount IS NOT NULL AND p_amount <= 0 THEN
+    RAISE EXCEPTION 'payment amount must be greater than zero' USING ERRCODE = '22023';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+      FROM unnest(p_installment_ids) AS requested(id)
+      LEFT JOIN fee_installments fi ON fi.id = requested.id
+     WHERE fi.id IS NULL
+  ) THEN
+    RAISE EXCEPTION 'one or more installments do not exist' USING ERRCODE = '22023';
   END IF;
 
   IF NOT COALESCE(p_pay_all, false) AND (
@@ -1030,8 +1073,12 @@ BEGIN
   v_group := public.next_payment_code(EXTRACT(YEAR FROM CURRENT_DATE)::integer);
 
   FOREACH v_id IN ARRAY (
-    SELECT array_agg(DISTINCT x) FROM unnest(p_installment_ids) AS x
+    SELECT array_agg(fi.id ORDER BY fi.due_date, fi.installment_no, fi.id)
+      FROM fee_installments fi
+     WHERE fi.id = ANY(p_installment_ids)
   ) LOOP
+    EXIT WHEN v_remaining <= 0;
+
     SELECT * INTO v_inst FROM fee_installments WHERE id = v_id FOR UPDATE;
 
     IF NOT FOUND THEN
@@ -1062,22 +1109,28 @@ BEGIN
       RAISE EXCEPTION '% is already awaiting verification', v_inst.label USING ERRCODE = '22023';
     END IF;
 
-    v_total := v_total + v_balance;
+    v_claim_amount := CASE
+      WHEN v_remaining IS NULL THEN v_balance
+      ELSE LEAST(v_balance, v_remaining)
+    END;
+
+    IF v_claim_amount <= 0 THEN
+      EXIT;
+    END IF;
 
     INSERT INTO payments (
       id, student_id, student_name, course_slug, amount, payment_date,
-      method, status, description, branch_id, installment_id, receipt_no
+      method, status, description, installment_id, receipt_no
     )
     SELECT public.next_payment_code(EXTRACT(YEAR FROM CURRENT_DATE)::integer),
            v_student.id,
            v_student.full_name,
            f.course_slug,
-           v_balance,
+           v_claim_amount,
            CURRENT_DATE,
            COALESCE(NULLIF(p_method, ''), 'upi'),
            'Pending',
            COALESCE(NULLIF(p_reference, ''), 'Claimed by student, reference not supplied'),
-           v_student.branch_id,
            v_inst.id,
            v_group
       FROM fees f
@@ -1085,16 +1138,24 @@ BEGIN
     RETURNING id INTO payment_id;
 
     installment_label := v_inst.label;
-    amount := v_balance;
+    amount := v_claim_amount;
     RETURN NEXT;
+
+    IF v_remaining IS NOT NULL THEN
+      v_remaining := v_remaining - v_claim_amount;
+    END IF;
   END LOOP;
+
+  IF v_remaining IS NOT NULL AND v_remaining > 0 THEN
+    RAISE EXCEPTION 'payment amount exceeds the selected outstanding balance' USING ERRCODE = '22023';
+  END IF;
 END;
 $$;
 
-COMMENT ON FUNCTION public.submit_installment_payments(uuid, uuid[], text, text, boolean) IS
-  'Files one Pending payment per chosen installment for the calling student. Moves no balance. service_role only.';
+COMMENT ON FUNCTION public.submit_installment_payments(uuid, uuid[], text, text, boolean, numeric) IS
+  'Allocates a student-supplied payment amount across chosen outstanding installments in due-date order and files Pending claims. Moves no balance. service_role only.';
 
-REVOKE ALL ON FUNCTION public.submit_installment_payments(uuid, uuid[], text, text, boolean) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.submit_installment_payments(uuid, uuid[], text, text, boolean, numeric) FROM PUBLIC;
 
 CREATE OR REPLACE FUNCTION public.verify_installment_payments(
   p_payment_ids text[],
@@ -1242,7 +1303,7 @@ BEGIN
 
   INSERT INTO payments (
     id, student_id, student_name, course_slug, amount, payment_date,
-    method, status, description, branch_id, installment_id, receipt_no,
+    method, status, description, installment_id, receipt_no,
     verified_at, verified_by
   ) VALUES (
     v_pid, v_fee.student_id, v_stud.full_name, v_fee.course_slug, v_balance,
@@ -1251,7 +1312,7 @@ BEGIN
       NULLIF(p_reference, ''),
       'Received at the institute — ' || v_inst.label
     ),
-    v_stud.branch_id, v_inst.id, v_pid, NOW(), 'admin'
+    v_inst.id, v_pid, NOW(), 'admin'
   );
 
   UPDATE fee_installments
@@ -1338,7 +1399,7 @@ GRANT EXECUTE ON FUNCTION public.create_fee_schedule(uuid, numeric, integer, dat
   TO service_role;
 GRANT EXECUTE ON FUNCTION public.apply_fee_delta(uuid, numeric, numeric)
   TO service_role;
-GRANT EXECUTE ON FUNCTION public.submit_installment_payments(uuid, uuid[], text, text, boolean)
+GRANT EXECUTE ON FUNCTION public.submit_installment_payments(uuid, uuid[], text, text, boolean, numeric)
   TO service_role;
 GRANT EXECUTE ON FUNCTION public.verify_installment_payments(text[], boolean, text, text)
   TO service_role;
@@ -1349,7 +1410,7 @@ GRANT EXECUTE ON FUNCTION public.unmark_installment(uuid, text, text)
 
 ALTER FUNCTION public.create_fee_schedule(uuid, numeric, integer, date)            OWNER TO postgres;
 ALTER FUNCTION public.apply_fee_delta(uuid, numeric, numeric)                     OWNER TO postgres;
-ALTER FUNCTION public.submit_installment_payments(uuid, uuid[], text, text, boolean) OWNER TO postgres;
+ALTER FUNCTION public.submit_installment_payments(uuid, uuid[], text, text, boolean, numeric) OWNER TO postgres;
 ALTER FUNCTION public.verify_installment_payments(text[], boolean, text, text)      OWNER TO postgres;
 ALTER FUNCTION public.mark_installment_paid(uuid, text, text)                      OWNER TO postgres;
 ALTER FUNCTION public.unmark_installment(uuid, text, text) OWNER TO postgres;
@@ -1358,10 +1419,10 @@ DO $$
 DECLARE
   t text;
   all_tables text[] := ARRAY[
-    'branches', 'courses', 'students', 'teachers', 'admins', 'fees',
-    'fee_installments', 'fee_extras', 'payments', 'attendance',
-    'certificates', 'videos', 'announcements', 'transactions',
-    'activity_log', 'events', 'pending_tasks', 'faculty', 'rate_limit_log'
+    'courses', 'students', 'teachers', 'admins', 'fees',
+    'fee_installments', 'fee_extras', 'payments',
+    'certificates', 'videos', 'transactions',
+    'faculty', 'rate_limit_log'
   ];
 BEGIN
   FOREACH t IN ARRAY all_tables LOOP
@@ -1369,29 +1430,29 @@ BEGIN
   END LOOP;
 END $$;
 
-GRANT SELECT ON TABLE branches, courses, announcements, faculty TO anon;
+GRANT SELECT ON TABLE courses, faculty TO anon;
 
 GRANT SELECT ON TABLE videos TO anon;
 
 GRANT SELECT ON TABLE
-  branches, courses, students, teachers, admins, fees, fee_installments,
-  fee_extras, payments, attendance, certificates, announcements, faculty,
-  videos, transactions, events, pending_tasks
+  courses, students, teachers, admins, fees, fee_installments,
+  fee_extras, payments, certificates, faculty,
+  videos, transactions
 TO authenticated;
 
 GRANT INSERT ON TABLE payments, certificates TO authenticated;
 GRANT UPDATE ON TABLE students, fees TO authenticated;
 
 GRANT INSERT, UPDATE, DELETE ON TABLE
-  branches, courses, students, teachers, admins, fees, fee_installments,
-  fee_extras, payments, attendance, certificates, videos, announcements,
-  transactions, activity_log, events, pending_tasks, faculty
+  courses, students, teachers, admins, fees, fee_installments,
+  fee_extras, payments, certificates, videos,
+  transactions, faculty
 TO authenticated;
 
 GRANT ALL ON TABLE
-  branches, courses, students, teachers, admins, fees, fee_installments,
-  fee_extras, payments, attendance, certificates, videos, announcements,
-  transactions, activity_log, events, pending_tasks, faculty, rate_limit_log
+  courses, students, teachers, admins, fees, fee_installments,
+  fee_extras, payments, certificates, videos,
+  transactions, faculty, rate_limit_log
 TO service_role;
 
 GRANT USAGE, SELECT ON SEQUENCE public.rate_limit_log_id_seq TO service_role;
@@ -1401,10 +1462,10 @@ DECLARE
   t text;
   stmt text;
   all_tables text[] := ARRAY[
-    'branches', 'courses', 'students', 'teachers', 'admins', 'fees',
-    'fee_installments', 'fee_extras', 'payments', 'attendance',
-    'certificates', 'videos', 'announcements', 'transactions',
-    'activity_log', 'events', 'pending_tasks', 'faculty', 'rate_limit_log'
+    'courses', 'students', 'teachers', 'admins', 'fees',
+    'fee_installments', 'fee_extras', 'payments',
+    'certificates', 'videos', 'transactions',
+    'faculty', 'rate_limit_log'
   ];
 BEGIN
   FOREACH t IN ARRAY all_tables LOOP
@@ -1427,7 +1488,7 @@ DO $$
 DECLARE
   t text;
   admin_only text[] := ARRAY[
-    'teachers', 'transactions', 'activity_log', 'events', 'pending_tasks'
+    'teachers', 'transactions'
   ];
 BEGIN
   FOREACH t IN ARRAY admin_only LOOP
@@ -1439,10 +1500,6 @@ BEGIN
   END LOOP;
 END $$;
 
-CREATE POLICY "Public read branches" ON branches FOR SELECT TO anon, authenticated USING (true);
-CREATE POLICY "Admins manage branches" ON branches FOR ALL TO authenticated
-  USING (public.is_admin()) WITH CHECK (public.is_admin());
-
 CREATE POLICY "Public read courses" ON courses FOR SELECT TO anon, authenticated USING (true);
 CREATE POLICY "Admins manage courses" ON courses FOR ALL TO authenticated
   USING (public.is_admin()) WITH CHECK (public.is_admin());
@@ -1451,9 +1508,20 @@ CREATE POLICY "Public read faculty" ON faculty FOR SELECT TO anon, authenticated
 CREATE POLICY "Admins manage faculty" ON faculty FOR ALL TO authenticated
   USING (public.is_admin()) WITH CHECK (public.is_admin());
 
-CREATE POLICY "Public read announcements" ON announcements FOR SELECT TO anon, authenticated USING (true);
-CREATE POLICY "Admins manage announcements" ON announcements FOR ALL TO authenticated
-  USING (public.is_admin()) WITH CHECK (public.is_admin());
+DO $$
+DECLARE
+  policy_name text;
+BEGIN
+  IF to_regclass('public.announcements') IS NOT NULL THEN
+    FOR policy_name IN
+      SELECT policyname FROM pg_policies
+       WHERE schemaname = 'public' AND tablename = 'announcements'
+    LOOP
+      EXECUTE format('DROP POLICY IF EXISTS %I ON public.announcements', policy_name);
+    END LOOP;
+    EXECUTE 'REVOKE ALL ON TABLE public.announcements FROM anon, authenticated';
+  END IF;
+END $$;
 
 CREATE POLICY "Public read published videos" ON videos FOR SELECT TO anon, authenticated
   USING (status = 'Published');
@@ -1497,10 +1565,20 @@ CREATE POLICY "Students file own payments" ON payments FOR INSERT TO authenticat
 CREATE POLICY "Admins full access" ON payments FOR ALL TO authenticated
   USING (public.is_admin()) WITH CHECK (public.is_admin());
 
-CREATE POLICY "Students read own attendance" ON attendance FOR SELECT TO authenticated
-  USING (student_id = public.current_student_id());
-CREATE POLICY "Admins full access" ON attendance FOR ALL TO authenticated
-  USING (public.is_admin()) WITH CHECK (public.is_admin());
+DO $$
+DECLARE
+  policy_name text;
+BEGIN
+  IF to_regclass('public.attendance') IS NOT NULL THEN
+    FOR policy_name IN
+      SELECT policyname FROM pg_policies
+       WHERE schemaname = 'public' AND tablename = 'attendance'
+    LOOP
+      EXECUTE format('DROP POLICY IF EXISTS %I ON public.attendance', policy_name);
+    END LOOP;
+    EXECUTE 'REVOKE ALL ON TABLE public.attendance FROM anon, authenticated';
+  END IF;
+END $$;
 
 CREATE POLICY "Students read own certificates" ON certificates FOR SELECT TO authenticated
   USING (student_id = public.current_student_id());

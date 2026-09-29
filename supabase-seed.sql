@@ -1,9 +1,3 @@
-INSERT INTO branches (id, name, tag, address, city, is_primary) VALUES
-  ('ramanthapur', 'Ramanthapur', 'Main Branch', 'Near Ramanthapur Bus Stand', 'Hyderabad, Telangana - 500013', true),
-  ('amberpet', 'Amberpet', NULL, 'Amberpet Main Road', 'Hyderabad, Telangana - 500013', false),
-  ('kodad', 'Kodad', NULL, 'Kodad Town Center', 'Kodad, Telangana - 508201', false)
-ON CONFLICT (id) DO NOTHING;
-
 INSERT INTO courses (slug, name, short_name, duration, type, description, full_description, topics, fees, fee_numeric, eligibility, certification, certification_body, popular, highlights, career_opportunities, tools, schedule, batch_size, status) VALUES
 ('dca', 'DCA', 'DCA', '40 Days', 'long-term', 'Diploma in Computer Applications', 'The Diploma in Computer Applications (DCA) is a foundational programme designed for students and professionals who want to build strong computer skills.', ARRAY['Basics','Typing Tutor','Windows','MS-Word','MS-Excel','MS-PowerPoint','Internet Level-I'], '₹3,000', 3000, '10th Pass or equivalent', 'Government Recognised Certificate', 'TNGC Institute', false, ARRAY['Hands-on practical training','Small batch sizes','Job-ready skills in 40 days','Free study material'], ARRAY['Data Entry Operator','Office Assistant','Computer Operator','BPO / KPO Executive'], ARRAY['MS-Word','MS-Excel','MS-PowerPoint','Internet Explorer'], 'Weekdays: 9 AM - 11 AM', '15-20 students', 'active'),
 ('adca', 'ADCA', 'ADCA', '2 Months', 'long-term', 'Advanced Diploma in Computer Applications', 'The Advanced Diploma in Computer Applications (ADCA) builds upon the DCA curriculum with deeper coverage of MS-Office tools, internet applications, accounting fundamentals, and Tally Prime.', ARRAY['Basics','Typing Tutor','Windows','MS-Office Suite','Internet','Accounting Intro','Tally Prime'], '₹5,000', 5000, '10th Pass or equivalent', 'Government Recognised Certificate', 'TNGC Institute', false, ARRAY['Tally Prime with GST','Advanced Excel & pivot tables','Practical accounting concepts','Placement assistance'], ARRAY['Accounts Assistant','Office Executive','Tally Operator','Inventory Manager'], ARRAY['MS-Office','Tally Prime','Internet','Email'], 'Weekdays: 9 AM - 11 AM', '15-20 students', 'active'),
@@ -59,10 +53,8 @@ BEGIN
 
   IF NOT EXISTS (SELECT 1 FROM public.faculty) THEN
     INSERT INTO faculty (name, role, branch, qualifications, description, is_founder) VALUES
-      ('Mr. Mada Eswar Rao', 'Founder & Director', 'Ramanthapur', ARRAY['MCA Gold Medalist','M.Tech'], 'With over 24 years of experience in computer education, Mr. Mada Eswar Rao has been instrumental in shaping the careers of thousands of students. His vision and dedication have made TNGC one of the most trusted computer training institutes in Hyderabad.', true),
-      ('Mrs. S Sowmya', 'Manager', 'Ramanthapur', ARRAY['MCA','5+ Years Experience'], NULL, false),
-      ('Mr. V Rajesh', 'Coding Trainer', 'Ramanthapur', ARRAY['B.Tech','3+ Years Experience'], NULL, false),
-      ('Mrs. K Lavanya', 'Computer Trainer', 'Ramanthapur', ARRAY['MCA','4+ Years Experience'], NULL, false),
-      ('Mrs. P Soundarya', 'Accountant', 'Ramanthapur', ARRAY['M.Com','5+ Years Experience'], NULL, false);
+      ('Mr. Mada Nadiya', 'Director', 'Ramanthapur', ARRAY['MBA','Degree'], 'The Director of The New Generation Computers, guiding students with experience, discipline, and a strong training culture.', true),
+      ('Mr G Madhavrao', 'Coding Trainer', 'Ramanthapur', ARRAY['Coding Trainer'], NULL, false),
+      ('Mr M Harish Kumar', 'Computer Trainer', 'Ramanthapur', ARRAY['Computer Trainer'], NULL, false);
   END IF;
 END $$;

@@ -8,8 +8,6 @@ import { Input } from "@/components/ui/input";
 import {
   Search,
   Plus,
-  Filter,
-  Download,
   Mail,
   Phone,
   Award,
@@ -190,22 +188,16 @@ export default function TeachersPage() {
       </div>
 
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-2">
+        <div className="flex w-full items-center gap-2 sm:w-auto">
           <div className="relative">
             <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
             <Input
               placeholder="Search teachers..."
-              className="w-64 pl-8"
+              className="w-full pl-8 sm:w-64"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
             />
           </div>
-          <Button variant="outline" size="icon">
-            <Filter className="h-4 w-4" />
-          </Button>
-          <Button variant="outline" size="icon">
-            <Download className="h-4 w-4" />
-          </Button>
         </div>
         <Button onClick={() => setAddOpen(true)}>
           <Plus className="mr-2 h-4 w-4" />

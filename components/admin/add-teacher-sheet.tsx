@@ -27,7 +27,6 @@ export function AddTeacherSheet({ open, onOpenChange, onSuccess }: AddTeacherShe
   const [phone, setPhone] = useState("")
   const [qualification, setQualification] = useState("")
   const [specialization, setSpecialization] = useState("")
-  const [branch, setBranch] = useState("")
   const [experience, setExperience] = useState("")
   const [salary, setSalary] = useState("")
   const [saving, setSaving] = useState(false)
@@ -48,7 +47,6 @@ export function AddTeacherSheet({ open, onOpenChange, onSuccess }: AddTeacherShe
       email: email.trim(),
       phone: phone.trim(),
       role: "Teacher",
-      branch_id: branch || null,
       subjects: [],
       experience: experience ? parseInt(experience) : 0,
       qualification: qualification || null,
@@ -70,7 +68,6 @@ export function AddTeacherSheet({ open, onOpenChange, onSuccess }: AddTeacherShe
     setPhone("")
     setQualification("")
     setSpecialization("")
-    setBranch("")
     setExperience("")
     setSalary("")
     onOpenChange(false)
@@ -85,8 +82,9 @@ export function AddTeacherSheet({ open, onOpenChange, onSuccess }: AddTeacherShe
       icon={GraduationCap}
       submitLabel={saving ? "Adding..." : "Add Teacher"}
       onSubmit={handleSubmit}
+      contentClassName="w-full sm:max-w-2xl"
     >
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <FormField label="Full Name" htmlFor="fullName">
           <Input id="fullName" placeholder="Enter full name" value={fullName} onChange={(e) => setFullName(e.target.value)} />
         </FormField>
@@ -95,7 +93,7 @@ export function AddTeacherSheet({ open, onOpenChange, onSuccess }: AddTeacherShe
         </FormField>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <FormField label="Phone" htmlFor="phone">
           <Input id="phone" type="tel" placeholder="Enter phone" value={phone} onChange={(e) => setPhone(e.target.value)} />
         </FormField>
@@ -116,7 +114,7 @@ export function AddTeacherSheet({ open, onOpenChange, onSuccess }: AddTeacherShe
         </FormField>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <FormField label="Specialization">
           <Select value={specialization} onValueChange={(v) => setSpecialization(v ?? "")}>
             <SelectTrigger>
@@ -132,21 +130,9 @@ export function AddTeacherSheet({ open, onOpenChange, onSuccess }: AddTeacherShe
             </SelectContent>
           </Select>
         </FormField>
-        <FormField label="Branch">
-          <Select value={branch} onValueChange={(v) => setBranch(v ?? "")}>
-            <SelectTrigger>
-              <SelectValue placeholder="Select branch" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="ramanthapur">Ramanthapur</SelectItem>
-              <SelectItem value="amberpet">Amberpet</SelectItem>
-              <SelectItem value="kodad">Kodad</SelectItem>
-            </SelectContent>
-          </Select>
-        </FormField>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <FormField label="Experience">
           <Select value={experience} onValueChange={(v) => setExperience(v ?? "")}>
             <SelectTrigger>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { BarChart3, TrendingUp, Users, BookOpen, Download, ArrowUpRight, Activity, Calendar, Zap, Loader2 } from "lucide-react";
+import { BarChart3, TrendingUp, Users, BookOpen, Download, ArrowUpRight, Activity, Zap, Loader2 } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,6 @@ import type { Database } from "@/types/database";
 
 type Student = Database["public"]["Tables"]["students"]["Row"];
 type Course = Database["public"]["Tables"]["courses"]["Row"];
-type Attendance = Database["public"]["Tables"]["attendance"]["Row"];
 type Payment = Database["public"]["Tables"]["payments"]["Row"];
 type Transaction = Database["public"]["Tables"]["transactions"]["Row"];
 type Branch = Database["public"]["Tables"]["branches"]["Row"];
@@ -141,29 +140,11 @@ function computeCompletionData(students: Student[], activeTab: string) {
   ];
 }
 
-function computeWeeklyAttendance(attendance: Attendance[]) {
-  const dayMap: Record<string, { present: number; total: number }> = {
-    Mon: { present: 0, total: 0 },
-    Tue: { present: 0, total: 0 },
-    Wed: { present: 0, total: 0 },
-    Thu: { present: 0, total: 0 },
-    Fri: { present: 0, total: 0 },
-    Sat: { present: 0, total: 0 },
-  };
-  const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
-  attendance.forEach((a) => {
-    const d = new Date(a.date);
-    const dayName = dayNames[d.getDay()];
-    if (dayMap[dayName]) {
-      dayMap[dayName].total++;
-      if (a.status === "Present") dayMap[dayName].present++;
-    }
-  });
-
-  return ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => ({
-    day,
-    rate: dayMap[day].total > 0 ? Math.round((dayMap[day].present / dayMap[day].total) * 100) : 0,
+function computePaymentStatus(payments: Payment[]) {
+  const statuses = ["Paid", "Pending", "Partial", "Rejected"];
+  return statuses.map((status) => ({
+    status,
+    count: payments.filter((payment) => payment.status === status).length,
   }));
 }
 
@@ -230,7 +211,6 @@ export default function AnalyticsPage() {
 
   const [students, setStudents] = useState<Student[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
-  const [attendance, setAttendance] = useState<Attendance[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
@@ -238,17 +218,15 @@ export default function AnalyticsPage() {
   useEffect(() => {
     async function fetchData() {
       setLoading(true);
-      const [studentsRes, coursesRes, attendanceRes, paymentsRes, transactionsRes, branchesRes] = await Promise.all([
+      const [studentsRes, coursesRes, paymentsRes, transactionsRes, branchesRes] = await Promise.all([
         supabase.from("students").select("*"),
         supabase.from("courses").select("*"),
-        supabase.from("attendance").select("*"),
         supabase.from("payments").select("*"),
         supabase.from("transactions").select("*"),
         supabase.from("branches").select("*"),
       ]);
       if (studentsRes.data) setStudents(studentsRes.data);
       if (coursesRes.data) setCourses(coursesRes.data);
-      if (attendanceRes.data) setAttendance(attendanceRes.data);
       if (paymentsRes.data) setPayments(paymentsRes.data);
       if (transactionsRes.data) setTransactions(transactionsRes.data);
       if (branchesRes.data) setBranches(branchesRes.data);
@@ -262,7 +240,7 @@ export default function AnalyticsPage() {
   const branchData = computeBranchData(students, branches);
   const revenueTrend = computeRevenueTrend(transactions);
   const completionData = computeCompletionData(students, activeTab);
-  const weeklyAttendance = computeWeeklyAttendance(attendance);
+  const paymentStatus = computePaymentStatus(payments);
   const topCourses = computeTopCourses(students, courses);
   const demographics = computeDemographics(students);
   const enrollmentPie = computeEnrollmentPie(students, courses);
@@ -524,25 +502,27 @@ export default function AnalyticsPage() {
         </Card>
       </div>
 
-      {/* Weekly Attendance + Top Courses */}
+      {/* Payment Status + Top Courses */}
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
-              <Calendar className="h-4 w-4" />
-              Weekly Attendance Rate
+              <Activity className="h-4 w-4" />
+              Payment Status
             </CardTitle>
-            <CardDescription className="text-xs">Average attendance by day</CardDescription>
+            <CardDescription className="text-xs">Payment records by verification status</CardDescription>
           </CardHeader>
           <CardContent>
             <ResponsiveContainer width="100%" height={240}>
-              <BarChart data={weeklyAttendance}>
-                <CartesianGrid {...gridStyle} />
-                <XAxis dataKey="day" tick={axisStyle} />
-                <YAxis domain={[0, 100]} tick={axisStyle} />
+              <PieChart>
+                <Pie data={paymentStatus} dataKey="count" nameKey="status" innerRadius={55} outerRadius={85} paddingAngle={3}>
+                  {paymentStatus.map((entry, index) => (
+                    <Cell key={entry.status} fill={CHART_PALETTE[index % CHART_PALETTE.length]} />
+                  ))}
+                </Pie>
                 <Tooltip contentStyle={tooltipStyle} />
-                <Bar dataKey="rate" name="Attendance %" fill="#10b981" radius={[4, 4, 0, 0]} />
-              </BarChart>
+                <Legend />
+              </PieChart>
             </ResponsiveContainer>
           </CardContent>
         </Card>

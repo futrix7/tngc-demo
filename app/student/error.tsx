@@ -10,6 +10,6 @@ export default function StudentError({
   reset: () => void
 }) {
   return (
-    <PortalError error={error} reset={reset} homeHref="/student/dashboard" homeLabel="Dashboard" />
+    <PortalError error={error} reset={reset} homeHref="/student/profile" homeLabel="Profile" />
   )
 }

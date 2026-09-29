@@ -8,7 +8,6 @@ import {
   Users,
   GraduationCap,
   BookOpen,
-  CalendarCheck,
   CreditCard,
   Wallet,
   BarChart3,
@@ -17,7 +16,6 @@ import {
   Sun,
   Moon,
   Video,
-  Megaphone,
   Award,
   IndianRupee,
 } from "lucide-react"
@@ -32,13 +30,11 @@ const sidebarLinks = [
   { label: "Students", href: "/admin/student", icon: Users },
   { label: "Teachers", href: "/admin/teacher", icon: GraduationCap },
   { label: "Courses", href: "/admin/course", icon: BookOpen },
-  { label: "Attendance", href: "/admin/attendence", icon: CalendarCheck },
   { label: "Installments", href: "/admin/installments", icon: IndianRupee },
   { label: "Payments", href: "/admin/payments", icon: CreditCard },
   { label: "Finance", href: "/admin/finanace", icon: Wallet },
   { label: "Certificates", href: "/admin/certificates", icon: Award },
   { label: "Videos", href: "/admin/videos", icon: Video },
-  { label: "Announcements", href: "/admin/announcements", icon: Megaphone },
   { label: "Analytics", href: "/admin/analytics", icon: BarChart3 },
 ]
 
@@ -94,7 +90,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           </Link>
           <button
             onClick={() => setSidebarOpen(false)}
-            className="inline-flex size-7 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted lg:hidden"
+            className="inline-flex size-9 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted lg:hidden"
           >
             <X className="size-4" />
           </button>
@@ -132,7 +128,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         <div className="flex h-10 items-center border-b border-border bg-card px-4 sm:px-6 lg:hidden">
           <button
             onClick={() => setSidebarOpen(true)}
-            className="inline-flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted"
+            className="inline-flex size-10 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted"
           >
             <Menu className="size-5" />
           </button>

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import {
   Card,
   CardContent,
@@ -27,11 +27,6 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog"
 import {
-  Tabs,
-  TabsList,
-  TabsTrigger,
-} from "@/components/ui/tabs"
-import {
   Search,
   Download,
   ChevronLeft,
@@ -45,6 +40,7 @@ import {
 import { cn } from "@/lib/utils"
 import { supabase } from "@/lib/supabase"
 import { useToast } from "@/components/ui/sonner"
+import { FilterDialog, type FilterField, type FilterValues } from "@/components/admin/filter-dialog"
 
 interface Installment {
   id: string
@@ -72,6 +68,11 @@ interface StudentMapEntry {
   branch_id: string | null
 }
 
+function unwrapFirst<T>(value: T | T[] | null | undefined): T | null {
+  if (Array.isArray(value)) return value[0] ?? null
+  return value ?? null
+}
+
 const statusConfig: Record<string, { className: string; icon: React.ElementType }> = {
   Paid: { className: "bg-emerald-500/15 text-emerald-600", icon: CheckCircle2 },
   Pending: { className: "bg-amber-500/15 text-amber-600", icon: Clock },
@@ -79,18 +80,29 @@ const statusConfig: Record<string, { className: string; icon: React.ElementType 
   Overdue: { className: "bg-red-500/15 text-red-600", icon: AlertTriangle },
 }
 
+function localDateValue(date: Date, includeDay = true) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, "0")
+  const day = String(date.getDate()).padStart(2, "0")
+  return includeDay ? `${year}-${month}-${day}` : `${year}-${month}`
+}
+
 export default function InstallmentsPage() {
   const { toast } = useToast()
   const [search, setSearch] = useState("")
   const [filter, setFilter] = useState("all")
+  const [periodType, setPeriodType] = useState("all")
+  const [periodValue, setPeriodValue] = useState(() => localDateValue(new Date(), false))
   const [currentPage, setCurrentPage] = useState(1)
+  const [totalCount, setTotalCount] = useState(0)
   const [loading, setLoading] = useState(true)
+  const [exporting, setExporting] = useState(false)
   const [installments, setInstallments] = useState<Installment[]>([])
   const [stats, setStats] = useState([
-    { label: "Total Collected", value: "₹0", color: "text-emerald-600 dark:text-emerald-400" },
-    { label: "Pending", value: "₹0", color: "text-amber-600 dark:text-amber-400" },
-    { label: "Overdue", value: "₹0", color: "text-red-600 dark:text-red-400" },
-    { label: "This Month", value: "₹0", color: "text-foreground" },
+    { label: "Page collected", value: "₹0", color: "text-emerald-600 dark:text-emerald-400" },
+    { label: "Page outstanding", value: "₹0", color: "text-amber-600 dark:text-amber-400" },
+    { label: "Page overdue", value: "₹0", color: "text-red-600 dark:text-red-400" },
+    { label: "Page collected this month", value: "₹0", color: "text-foreground" },
   ])
   const perPage = 10
 
@@ -101,25 +113,88 @@ export default function InstallmentsPage() {
   const [unmarkingId, setUnmarkingId] = useState<string | null>(null)
   const [confirmUnmark, setConfirmUnmark] = useState<Installment | null>(null)
   const [unmarkReason, setUnmarkReason] = useState("")
+  const requestId = useRef(0)
+  const manualFetchKey = useRef<string | null>(null)
 
-  const fetchInstallments = useCallback(async () => {
+  const fetchInstallments = useCallback(async (
+    page = 1,
+    searchTerm = search,
+    selectedStatus = filter,
+    selectedPeriod = periodType,
+    selectedPeriodValue = periodValue,
+  ) => {
+    const activeRequest = ++requestId.current
     setLoading(true)
 
-    const { data: rows, error } = await supabase
+    let query = supabase
       .from("fee_installments")
-      .select("*, fees!inner(id, student_id, course_slug)")
-      .order("created_at", { ascending: false })
+      .select("*, fees!inner(id, student_id, course_slug, students!inner(full_name, branch_id))", { count: "exact" })
+      .order("due_date", { ascending: true })
+
+    const safeSearch = searchTerm.trim().slice(0, 80).replace(/[^\p{L}\p{N}\s@._+-]/gu, "")
+    if (safeSearch) {
+      query = query.or(`label.ilike.%${safeSearch}%,fees.course_slug.ilike.%${safeSearch}%,fees.students.full_name.ilike.%${safeSearch}%`)
+    }
+    if (selectedStatus === "confirm") {
+      const claimIds: string[] = []
+      let offset = 0
+      while (true) {
+        const { data: claims, error: claimsError } = await supabase
+          .from("payments")
+          .select("installment_id")
+          .eq("status", "Pending")
+          .not("installment_id", "is", null)
+          .range(offset, offset + 999)
+        if (claimsError) {
+          console.error("Error fetching pending installment claims:", claimsError)
+          setLoading(false)
+          return false
+        }
+        claimIds.push(...(claims ?? []).map((claim) => claim.installment_id).filter(Boolean) as string[])
+        if (!claims || claims.length < 1000) break
+        offset += 1000
+      }
+      const uniqueClaimIds = [...new Set(claimIds)]
+      if (uniqueClaimIds.length === 0) {
+        setInstallments([])
+        setTotalCount(0)
+        setLoading(false)
+        return true
+      }
+      query = query.in("id", uniqueClaimIds)
+    } else if (selectedStatus !== "all") {
+      query = query.eq("status", selectedStatus === "paid" ? "Paid" : selectedStatus === "partial" ? "Partial" : "Pending")
+    }
+    if (selectedPeriod === "date" && selectedPeriodValue) query = query.eq("due_date", selectedPeriodValue)
+    if (selectedPeriod === "month" && selectedPeriodValue) {
+      const [year, month] = selectedPeriodValue.split("-").map(Number)
+      const lastDay = new Date(year, month, 0).getDate()
+      query = query.gte("due_date", `${selectedPeriodValue}-01`).lte("due_date", `${selectedPeriodValue}-${String(lastDay).padStart(2, "0")}`)
+    }
+    if (selectedPeriod === "quarter" && selectedPeriodValue) {
+      const [year, quarter] = selectedPeriodValue.split("-Q").map(Number)
+      const firstMonth = (quarter - 1) * 3 + 1
+      const from = `${year}-${String(firstMonth).padStart(2, "0")}-01`
+      const lastDay = new Date(year, firstMonth + 2, 0).getDate()
+      const to = `${year}-${String(firstMonth + 2).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`
+      query = query.gte("due_date", from).lte("due_date", to)
+    }
+
+    const { data: rows, error, count } = await query.range((page - 1) * perPage, page * perPage - 1)
 
     if (error) {
       console.error("Error fetching installments:", error)
       setLoading(false)
-      return
+      return false
     }
+
+    if (activeRequest !== requestId.current) return true
+    setTotalCount(count ?? 0)
 
     if (!rows || rows.length === 0) {
       setInstallments([])
       setLoading(false)
-      return
+      return true
     }
 
     const { data: payments, error: paymentsError } = await supabase
@@ -151,8 +226,12 @@ export default function InstallmentsPage() {
       }
     }
 
-    const studentIds = [...new Set(rows.map((r) => r?.fees?.student_id).filter(Boolean))] as string[]
-    const courseSlugs = [...new Set(rows.map((r) => r?.fees?.course_slug).filter(Boolean))] as string[]
+    const studentIds = [...new Set(rows
+      .map((r) => unwrapFirst(r.fees)?.student_id ?? null)
+      .filter(Boolean))] as string[]
+    const courseSlugs = [...new Set(rows
+      .map((r) => unwrapFirst(r.fees)?.course_slug ?? null)
+      .filter(Boolean))] as string[]
 
     const [studentsRes, coursesRes] = await Promise.all([
       supabase.from("students").select("id, full_name, branch_id").in("id", studentIds),
@@ -173,12 +252,16 @@ export default function InstallmentsPage() {
 
     const parsed: Installment[] = rows.map((row) => {
       const feeId = row.fee_id
+      const fee = unwrapFirst(row.fees)
+      const studentInfo = fee ? unwrapFirst(fee.students as StudentMapEntry[] | StudentMapEntry | null) : null
+      const studentId = fee?.student_id ?? "N/A"
+      const courseSlug = fee?.course_slug ?? ""
       // installment_no is stored, not counted from row order. It used to be
       // derived from how many rows had been seen for the fee, which silently
       // renumbered a schedule whenever the query's ordering changed.
-      const student = studentsMap[row.fees?.student_id ?? ""]
+      const student = studentsMap[studentId] ?? (studentInfo ? { full_name: studentInfo.full_name ?? null, branch_id: studentInfo.branch_id ?? null } : null)
       const branchName = student ? (branchesMap[student.branch_id ?? ""] || "N/A") : "N/A"
-      const courseName = coursesMap[row.fees?.course_slug] || row.fees?.course_slug || "N/A"
+      const courseName = coursesMap[courseSlug] || courseSlug || "N/A"
       const ledgerPaid = paidByInstallment[row.id] ?? 0
       const pendingClaim = pendingByInstallment[row.id]
       const paidAmount = Math.min(row.amount, row.status === "Paid" ? Math.max(ledgerPaid, row.amount) : ledgerPaid)
@@ -187,7 +270,7 @@ export default function InstallmentsPage() {
       return {
         id: row.id,
         feeId,
-        studentId: row.fees?.student_id ?? "N/A",
+        studentId,
         studentName: student?.full_name ?? "Unknown",
         course: courseName,
         label: row.label,
@@ -223,19 +306,28 @@ export default function InstallmentsPage() {
       .reduce((sum, i) => sum + i.balance, 0)
 
     setStats([
-      { label: "Total Collected", value: `₹${totalCollected.toLocaleString("en-IN")}`, color: "text-emerald-600 dark:text-emerald-400" },
-      { label: "Pending", value: `₹${pendingAmount.toLocaleString("en-IN")}`, color: "text-amber-600 dark:text-amber-400" },
-      { label: "Overdue", value: `₹${overdueAmount.toLocaleString("en-IN")}`, color: "text-red-600 dark:text-red-400" },
-      { label: "This Month", value: `₹${thisMonthAmount.toLocaleString("en-IN")}`, color: "text-foreground" },
+      { label: "Page collected", value: `₹${totalCollected.toLocaleString("en-IN")}`, color: "text-emerald-600 dark:text-emerald-400" },
+      { label: "Page outstanding", value: `₹${pendingAmount.toLocaleString("en-IN")}`, color: "text-amber-600 dark:text-amber-400" },
+      { label: "Page overdue", value: `₹${overdueAmount.toLocaleString("en-IN")}`, color: "text-red-600 dark:text-red-400" },
+      { label: "Page collected this month", value: `₹${thisMonthAmount.toLocaleString("en-IN")}`, color: "text-foreground" },
     ])
 
     setLoading(false)
-  }, [])
+    return true
+  }, [filter, periodType, periodValue, perPage, search])
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- mount-time data fetch
-    fetchInstallments()
-  }, [fetchInstallments])
+    const request = { currentPage, search, filter, periodType, periodValue }
+    const requestKey = JSON.stringify(request)
+    const timer = setTimeout(() => {
+      if (manualFetchKey.current === requestKey) {
+        manualFetchKey.current = null
+        return
+      }
+      void fetchInstallments(currentPage, search, filter, periodType, periodValue)
+    }, 250)
+    return () => clearTimeout(timer)
+  }, [currentPage, fetchInstallments, filter, periodType, periodValue, search])
 
   async function handleConfirmClaim(inst: Installment) {
     if (inst.pendingPaymentIds.length === 0 || verifyingId) return
@@ -389,53 +481,178 @@ export default function InstallmentsPage() {
     }
   }
 
-  const handleExport = () => {
-    if (filtered.length === 0) {
-      toast("Nothing to export", { variant: "destructive" })
-      return
+  const handleExport = async () => {
+    setExporting(true)
+    const csvRows: unknown[][] = [["Student", "Student ID", "Course", "Installment", "Amount", "Paid", "Balance", "Due Date", "Paid Date", "Status", "Branch"]]
+    const safeSearch = search.trim().slice(0, 80).replace(/[^\p{L}\p{N}\s@._+-]/gu, "")
+
+    try {
+      let claimIds: string[] | null = null
+      if (filter === "confirm") {
+        claimIds = []
+        let claimOffset = 0
+        while (true) {
+          const { data, error } = await supabase.from("payments").select("installment_id")
+            .eq("status", "Pending").not("installment_id", "is", null).range(claimOffset, claimOffset + 999)
+          if (error) throw error
+          claimIds.push(...(data ?? []).map((payment) => payment.installment_id).filter(Boolean) as string[])
+          if (!data || data.length < 1000) break
+          claimOffset += 1000
+        }
+      }
+
+      let offset = 0
+      while (true) {
+        let query = supabase.from("fee_installments")
+          .select("id, fee_id, label, installment_no, amount, due_date, paid_date, status, fees!inner(student_id, course_slug, students!inner(full_name, branch_id))")
+          .order("due_date", { ascending: true })
+        if (safeSearch) query = query.or(`label.ilike.%${safeSearch}%,fees.course_slug.ilike.%${safeSearch}%,fees.students.full_name.ilike.%${safeSearch}%`)
+        if (claimIds) query = claimIds.length ? query.in("id", claimIds) : query.eq("id", "")
+        else if (filter !== "all") query = query.eq("status", filter === "paid" ? "Paid" : filter === "partial" ? "Partial" : "Pending")
+        if (periodType === "date" && periodValue) query = query.eq("due_date", periodValue)
+        if (periodType === "month" && periodValue) {
+          const [year, month] = periodValue.split("-").map(Number)
+          const lastDay = new Date(year, month, 0).getDate()
+          query = query.gte("due_date", `${periodValue}-01`).lte("due_date", `${periodValue}-${String(lastDay).padStart(2, "0")}`)
+        }
+        if (periodType === "quarter" && periodValue) {
+          const [year, quarter] = periodValue.split("-Q").map(Number)
+          const firstMonth = (quarter - 1) * 3 + 1
+          const lastDay = new Date(year, firstMonth + 2, 0).getDate()
+          query = query.gte("due_date", `${year}-${String(firstMonth).padStart(2, "0")}-01`)
+            .lte("due_date", `${year}-${String(firstMonth + 2).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`)
+        }
+        const { data: rows, error } = await query.range(offset, offset + 999)
+        if (error) throw error
+        if (!rows || rows.length === 0) break
+
+        const ids = rows.map((row) => row.id)
+        const feeRows = rows.map((row) => unwrapFirst(row.fees)).filter(Boolean) as Array<{ student_id: string; course_slug: string; students?: { full_name: string | null; branch_id: string | null } | Array<{ full_name: string | null; branch_id: string | null }> | null }>
+        const slugs = [...new Set(feeRows.map((fee) => fee.course_slug).filter(Boolean))] as string[]
+        const branchIds = [...new Set(feeRows
+          .map((fee) => unwrapFirst(fee.students as { full_name: string | null; branch_id: string | null }[] | { full_name: string | null; branch_id: string | null } | null)?.branch_id ?? null)
+          .filter(Boolean))] as string[]
+        const [paymentsResult, coursesResult, branchesResult] = await Promise.all([
+          supabase.from("payments").select("installment_id, amount, status").in("installment_id", ids).in("status", ["Paid", "Pending"]),
+          slugs.length ? supabase.from("courses").select("slug, name").in("slug", slugs) : Promise.resolve({ data: [] as { slug: string; name: string }[], error: null }),
+          branchIds.length ? supabase.from("branches").select("id, name").in("id", branchIds) : Promise.resolve({ data: [] as { id: string; name: string }[], error: null }),
+        ])
+        if (paymentsResult.error || coursesResult.error || branchesResult.error) throw new Error("Unable to load export details")
+        const paidById = new Map<string, number>()
+        for (const payment of paymentsResult.data ?? []) {
+          if (payment.status === "Paid" && payment.installment_id) paidById.set(payment.installment_id, (paidById.get(payment.installment_id) ?? 0) + Number(payment.amount))
+        }
+        const coursesBySlug = new Map((coursesResult.data ?? []).map((course) => [course.slug, course.name]))
+        const branchesById = new Map((branchesResult.data ?? []).map((branch) => [branch.id, branch.name]))
+        for (const row of rows) {
+          const fee = unwrapFirst(row.fees)
+          const studentInfo = fee ? unwrapFirst(fee.students as { full_name: string | null; branch_id: string | null }[] | { full_name: string | null; branch_id: string | null } | null) : null
+          const amount = Number(row.amount)
+          const paidAmount = Math.min(amount, row.status === "Paid" ? Math.max(paidById.get(row.id) ?? 0, amount) : paidById.get(row.id) ?? 0)
+          const balance = Math.max(0, Number((amount - paidAmount).toFixed(2)))
+          csvRows.push([
+            studentInfo?.full_name ?? "Unknown",
+            fee?.student_id ?? "",
+            coursesBySlug.get(fee?.course_slug ?? "") ?? fee?.course_slug ?? "",
+            row.label,
+            amount,
+            paidAmount,
+            balance,
+            row.due_date,
+            row.paid_date ?? "",
+            balance === 0 ? "Paid" : paidAmount > 0 ? "Partial" : "Pending",
+            branchesById.get(studentInfo?.branch_id ?? "") ?? "",
+          ])
+        }
+        if (rows.length < 1000) break
+        offset += 1000
+      }
+
+      if (csvRows.length === 1) {
+        toast("Nothing to export", { variant: "destructive" })
+        return
+      }
+      const csvCell = (value: unknown) => {
+        const text = String(value ?? "")
+        const safeText = /^[=+@-]/.test(text) ? `'${text}` : text
+        return `"${safeText.replace(/"/g, '""')}"`
+      }
+      const csv = csvRows.map((row) => row.map(csvCell).join(",")).join("\r\n")
+      const url = URL.createObjectURL(new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" }))
+      const anchor = document.createElement("a")
+      anchor.href = url
+      anchor.download = `installments-${new Date().toISOString().split("T")[0]}.csv`
+      anchor.click()
+      URL.revokeObjectURL(url)
+    } catch (error) {
+      console.error("Error exporting installments:", error)
+      toast("Unable to export installments. Please try again.", { variant: "destructive" })
+    } finally {
+      setExporting(false)
     }
-    const header = ["Student", "Student ID", "Course", "Installment", "Amount", "Paid", "Balance", "Due Date", "Paid Date", "Status", "Branch"]
-    const rows = [header, ...filtered.map((i) => [
-      i.studentName,
-      i.studentId,
-      i.course,
-      i.label,
-      String(i.amount),
-      String(i.paidAmount),
-      String(i.balance),
-      i.dueDate,
-      i.paidDate ?? "",
-      i.status,
-      i.branch,
-    ])]
-    const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n")
-    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = `installments-${new Date().toISOString().split("T")[0]}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
   }
 
-  const filtered = installments.filter((inst) => {
-    const matchesSearch =
-      inst.studentName.toLowerCase().includes(search.toLowerCase()) ||
-      inst.studentId.toLowerCase().includes(search.toLowerCase()) ||
-      inst.course.toLowerCase().includes(search.toLowerCase())
+  const totalPages = Math.ceil(totalCount / perPage)
+  const paginated = installments
 
-    const matchesFilter =
-      filter === "all" ||
-      (filter === "paid" && inst.status === "Paid") ||
-      (filter === "pending" && inst.status === "Pending") ||
-      (filter === "partial" && inst.status === "Partial") ||
-      (filter === "confirm" && inst.pendingPaymentIds.length > 0)
-
-    return matchesSearch && matchesFilter
+  const quarterOptions = Array.from({ length: 16 }, (_, index) => {
+    const date = new Date()
+    date.setMonth(date.getMonth() - index * 3)
+    const quarter = Math.floor(date.getMonth() / 3) + 1
+    return { value: `${date.getFullYear()}-Q${quarter}`, label: `Q${quarter} ${date.getFullYear()}` }
   })
+  const installmentFilterFields: FilterField[] = [
+    {
+      key: "status",
+      label: "Payment status",
+      type: "select",
+      defaultValue: "all",
+      options: [
+        { value: "all", label: "All statuses" },
+        { value: "paid", label: "Paid" },
+        { value: "pending", label: "Pending" },
+        { value: "partial", label: "Partial" },
+        { value: "confirm", label: "Awaiting confirmation" },
+      ],
+    },
+    {
+      key: "period",
+      label: "Due-date period",
+      type: "select",
+      defaultValue: "all",
+      options: [
+        { value: "all", label: "All dates" },
+        { value: "month", label: "Specific month" },
+        { value: "date", label: "Specific date" },
+        { value: "quarter", label: "Specific quarter" },
+      ],
+    },
+    { key: "month", label: "Month", type: "month", defaultValue: "", showWhen: { key: "period", value: "month" } },
+    { key: "date", label: "Due date", type: "date", defaultValue: "", showWhen: { key: "period", value: "date" } },
+    {
+      key: "quarter",
+      label: "Quarter",
+      type: "select",
+      defaultValue: "",
+      options: quarterOptions,
+      showWhen: { key: "period", value: "quarter" },
+    },
+  ]
 
-  const totalPages = Math.ceil(filtered.length / perPage)
-  const paginated = filtered.slice((currentPage - 1) * perPage, currentPage * perPage)
+  async function applyInstallmentFilters(values: FilterValues) {
+    const nextStatus = values.status || "all"
+    const nextPeriod = values.period || "all"
+    const nextValue = nextPeriod === "date" ? values.date || ""
+      : nextPeriod === "month" ? values.month || ""
+        : nextPeriod === "quarter" ? values.quarter || "" : ""
+    const request = { currentPage: 1, search, filter: nextStatus, periodType: nextPeriod, periodValue: nextValue }
+    manualFetchKey.current = JSON.stringify(request)
+    setFilter(nextStatus)
+    setPeriodType(nextPeriod)
+    setPeriodValue(nextValue)
+    setCurrentPage(1)
+    if (!await fetchInstallments(1, search, nextStatus, nextPeriod, nextValue)) throw new Error("Installment filter request failed")
+  }
 
   if (loading) {
     return (
@@ -471,38 +688,42 @@ export default function InstallmentsPage() {
             <div>
               <h2 className="text-lg font-semibold">Installment Records</h2>
               <p className="text-sm text-muted-foreground">
-                Showing {filtered.length} of {installments.length} installments
+                Showing {paginated.length} of {totalCount.toLocaleString()} matching installments
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <div className="relative">
+              <div className="relative w-full sm:w-auto">
                 <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   placeholder="Search student or course..."
                   value={search}
                   onChange={(e) => { setSearch(e.target.value); setCurrentPage(1) }}
-                  className="pl-8 w-64"
+                  className="w-full pl-8 sm:w-72"
                 />
               </div>
-              <Button variant="outline" size="sm" onClick={handleExport}>
+              <FilterDialog
+                title="Filter installments"
+                description="Stage status and due-date filters, then apply them together."
+                fields={installmentFilterFields}
+                values={{
+                  status: filter,
+                  period: periodType,
+                  month: periodType === "month" ? periodValue : "",
+                  date: periodType === "date" ? periodValue : "",
+                  quarter: periodType === "quarter" ? periodValue : "",
+                }}
+                onApply={applyInstallmentFilters}
+                onClear={applyInstallmentFilters}
+              />
+              <Button variant="outline" size="sm" onClick={handleExport} disabled={exporting}>
                 <Download className="h-4 w-4" />
-                <span className="hidden sm:inline">Export</span>
+                <span className="hidden sm:inline">{exporting ? "Preparing..." : "Export"}</span>
               </Button>
             </div>
           </div>
         </CardContent>
 
         <CardContent className="space-y-4">
-          <Tabs value={filter} onValueChange={(v) => { setFilter(v ?? "all"); setCurrentPage(1) }}>
-            <TabsList className="w-full sm:w-auto">
-              <TabsTrigger value="all">All</TabsTrigger>
-              <TabsTrigger value="paid">Paid</TabsTrigger>
-              <TabsTrigger value="pending">Pending</TabsTrigger>
-              <TabsTrigger value="partial">Partial</TabsTrigger>
-              <TabsTrigger value="confirm">Confirm</TabsTrigger>
-            </TabsList>
-          </Tabs>
-
           <Table>
             <TableHeader>
               <TableRow>
@@ -570,7 +791,7 @@ export default function InstallmentsPage() {
                           <Button
                             size="sm"
                             variant="outline"
-                            className="h-8 gap-1.5 border-emerald-600/30 px-2 text-emerald-700 hover:bg-emerald-600/10 dark:text-emerald-400"
+                            className="h-10 gap-2 border-emerald-600/30 px-3 text-sm text-emerald-700 hover:bg-emerald-600/10 dark:text-emerald-400"
                             onClick={() => handleConfirmClaim(inst)}
                             disabled={verifyingId !== null}
                             title="Confirm this student payment"

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Card,
   CardHeader,
@@ -22,17 +22,19 @@ import {
 } from "@/components/ui/table";
 import {
   Search,
-  Filter,
   Download,
   ArrowRight,
   Phone,
   ChevronLeft,
   ChevronRight,
   Loader2,
+  Plus,
 } from "lucide-react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/lib/supabase";
+import { AddStudentSheet } from "@/components/admin/add-student-sheet";
+import { FilterDialog, type FilterField, type FilterValues } from "@/components/admin/filter-dialog";
 
 interface Student {
   id: string;
@@ -59,6 +61,10 @@ const statusVariant: Record<
   Inactive: "destructive",
 };
 
+function sanitizeStudentSearch(value: string) {
+  return value.trim().slice(0, 80).replace(/[^\p{L}\p{N}\s@._+-]/gu, "");
+}
+
 export default function AdminStudentsPage() {
   const [students, setStudents] = useState<Student[]>([]);
   const [loading, setLoading] = useState(true);
@@ -69,22 +75,46 @@ export default function AdminStudentsPage() {
     { label: "Inactive", value: 0, color: "text-red-600 dark:text-red-400" },
   ]);
   const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [courseFilter, setCourseFilter] = useState("all");
+  const [courses, setCourses] = useState<{ slug: string; name: string }[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
+  const [addOpen, setAddOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const studentsPerPage = 10;
+  const requestId = useRef(0);
+  const manualFetchKey = useRef<string | null>(null);
 
-  async function fetchStudents() {
+  const fetchStudents = useCallback(async (page: number, term: string, selectedStatus: string, selectedCourse: string) => {
+    const activeRequest = ++requestId.current;
     setLoading(true);
 
-    const { data: studentsRows, error } = await supabase
+    let query = supabase
       .from("students")
-      .select("id, full_name, phone, enrollment_date, status, course_slug, branch_id")
+      .select("id, full_name, email, phone, enrollment_date, status, course_slug, branch_id", { count: "exact" })
       .order("created_at", { ascending: false });
+
+    const safeTerm = sanitizeStudentSearch(term);
+    if (safeTerm) {
+      query = query.or(`full_name.ilike.%${safeTerm}%,email.ilike.%${safeTerm}%,phone.ilike.%${safeTerm}%,id.ilike.%${safeTerm}%`);
+    }
+    if (selectedStatus !== "all") query = query.eq("status", selectedStatus);
+    if (selectedCourse !== "all") query = query.eq("course_slug", selectedCourse);
+
+    const { data: studentsRows, error, count } = await query.range(
+      (page - 1) * studentsPerPage,
+      page * studentsPerPage - 1
+    );
 
     if (error) {
       console.error("Error fetching students:", error);
+      if (activeRequest === requestId.current) setStudents([]);
       setLoading(false);
-      return;
+      return false;
     }
+
+    if (activeRequest !== requestId.current) return true;
 
     const courseSlugs = [...new Set(studentsRows.map((s) => s.course_slug).filter(Boolean))] as string[];
     const branchIds = [...new Set(studentsRows.map((s) => s.branch_id).filter(Boolean))] as string[];
@@ -123,40 +153,136 @@ export default function AdminStudentsPage() {
     }));
 
     setStudents(mapped);
-
-    const total = mapped.length;
-    const active = mapped.filter((s) => s.status === "Active").length;
-    const pending = mapped.filter((s) => s.status === "Pending").length;
-    const inactive = mapped.filter((s) => s.status === "Inactive").length;
-
-    setStats([
-      { label: "Total Students", value: total, color: "text-foreground" },
-      { label: "Active", value: active, color: "text-emerald-600 dark:text-emerald-400" },
-      { label: "Pending", value: pending, color: "text-amber-600 dark:text-amber-400" },
-      { label: "Inactive", value: inactive, color: "text-red-600 dark:text-red-400" },
-    ]);
-
+    setTotalCount(count ?? 0);
     setLoading(false);
-  }
-
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- mount-time data fetch
-    fetchStudents();
+    return true;
   }, []);
 
-  const filteredStudents = students.filter(
-    (student) =>
-      student.name.toLowerCase().includes(search.toLowerCase()) ||
-      student.id.toLowerCase().includes(search.toLowerCase()) ||
-      student.course.toLowerCase().includes(search.toLowerCase())
-  );
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const queryKey = JSON.stringify({ currentPage, search, statusFilter, courseFilter });
+      if (manualFetchKey.current === queryKey) {
+        manualFetchKey.current = null;
+        return;
+      }
+      fetchStudents(currentPage, search, statusFilter, courseFilter);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [courseFilter, currentPage, fetchStudents, search, statusFilter]);
 
-  const totalPages = Math.ceil(filteredStudents.length / studentsPerPage);
-  const startIndex = (currentPage - 1) * studentsPerPage;
-  const paginatedStudents = filteredStudents.slice(
-    startIndex,
-    startIndex + studentsPerPage
-  );
+  useEffect(() => {
+    async function fetchDirectoryStats() {
+      const [coursesResult, totalResult, activeResult, pendingResult, inactiveResult] = await Promise.all([
+        supabase.from("courses").select("slug, name").order("name"),
+        supabase.from("students").select("id", { count: "exact", head: true }),
+        supabase.from("students").select("id", { count: "exact", head: true }).eq("status", "Active"),
+        supabase.from("students").select("id", { count: "exact", head: true }).eq("status", "Pending"),
+        supabase.from("students").select("id", { count: "exact", head: true }).eq("status", "Inactive"),
+      ]);
+      setCourses(coursesResult.data ?? []);
+      setStats([
+        { label: "Total Students", value: totalResult.count ?? 0, color: "text-foreground" },
+        { label: "Active", value: activeResult.count ?? 0, color: "text-emerald-600 dark:text-emerald-400" },
+        { label: "Pending", value: pendingResult.count ?? 0, color: "text-amber-600 dark:text-amber-400" },
+        { label: "Inactive", value: inactiveResult.count ?? 0, color: "text-red-600 dark:text-red-400" },
+      ]);
+    }
+    fetchDirectoryStats();
+  }, []);
+
+  const totalPages = Math.ceil(totalCount / studentsPerPage);
+
+  const directoryFilterFields: FilterField[] = [
+    {
+      key: "status",
+      label: "Student status",
+      type: "select",
+      defaultValue: "all",
+      options: [
+        { value: "all", label: "All statuses" },
+        { value: "Active", label: "Active" },
+        { value: "Pending", label: "Pending" },
+        { value: "Inactive", label: "Inactive" },
+      ],
+    },
+    {
+      key: "course",
+      label: "Course",
+      type: "select",
+      defaultValue: "all",
+      options: [
+        { value: "all", label: "All courses" },
+        ...courses.map((course) => ({ value: course.slug, label: course.name })),
+      ],
+    },
+  ];
+
+  async function applyDirectoryFilters(values: FilterValues) {
+    const nextStatus = values.status || "all";
+    const nextCourse = values.course || "all";
+    const request = { currentPage: 1, search, statusFilter: nextStatus, courseFilter: nextCourse };
+    manualFetchKey.current = JSON.stringify(request);
+    setStatusFilter(nextStatus);
+    setCourseFilter(nextCourse);
+    setCurrentPage(1);
+    if (!await fetchStudents(1, search, nextStatus, nextCourse)) throw new Error("Student filter request failed")
+  }
+
+  async function handleExport() {
+    setExporting(true);
+    const safeTerm = sanitizeStudentSearch(search);
+    const rows: { id: string; full_name: string; email: string; phone: string; course_slug: string | null; branch_id: string | null; enrollment_date: string; status: string }[] = [];
+    let offset = 0;
+
+    try {
+      while (true) {
+        let query = supabase
+          .from("students")
+          .select("id, full_name, email, phone, course_slug, branch_id, enrollment_date, status")
+          .order("created_at", { ascending: false });
+        if (safeTerm) query = query.or(`full_name.ilike.%${safeTerm}%,email.ilike.%${safeTerm}%,phone.ilike.%${safeTerm}%,id.ilike.%${safeTerm}%`);
+        if (statusFilter !== "all") query = query.eq("status", statusFilter);
+        if (courseFilter !== "all") query = query.eq("course_slug", courseFilter);
+        const { data, error } = await query.range(offset, offset + 999);
+        if (error) throw error;
+        rows.push(...(data ?? []));
+        if (!data || data.length < 1000) break;
+        offset += 1000;
+      }
+
+      const branchIds = [...new Set(rows.map((row) => row.branch_id).filter(Boolean))] as string[];
+      const { data: branchRows } = branchIds.length
+        ? await supabase.from("branches").select("id, name").in("id", branchIds)
+        : { data: [] as { id: string; name: string }[] };
+      const branchNames = new Map((branchRows ?? []).map((row) => [row.id, row.name]));
+      const columns = ["Student ID", "Name", "Email", "Phone", "Course", "Branch", "Enrollment Date", "Status"];
+      const csvCell = (value: unknown) => {
+        const text = String(value ?? "");
+        const safeText = /^[=+@-]/.test(text) ? `'${text}` : text;
+        return `"${safeText.replace(/"/g, '""')}"`;
+      };
+      const csv = [columns, ...rows.map((row) => [
+        row.id,
+        row.full_name,
+        row.email,
+        row.phone,
+        courses.find((item) => item.slug === row.course_slug)?.name ?? row.course_slug ?? "",
+        branchNames.get(row.branch_id ?? "") ?? "",
+        row.enrollment_date,
+        row.status,
+      ])].map((line) => line.map(csvCell).join(",")).join("\r\n");
+      const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = "students.csv";
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error("Error exporting students:", error);
+    } finally {
+      setExporting(false);
+    }
+  }
 
   if (loading) {
     return (
@@ -169,9 +295,15 @@ export default function AdminStudentsPage() {
   return (
     <div className="space-y-6">
       {/* Page Header */}
-      <div className="space-y-1">
-        <h1 className="text-3xl font-bold tracking-tight">Students</h1>
-        <p className="text-muted-foreground">Manage all student records</p>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div className="space-y-1">
+          <h1 className="text-3xl font-bold tracking-tight">Students</h1>
+          <p className="text-muted-foreground">Manage all student records</p>
+        </div>
+        <Button onClick={() => setAddOpen(true)} className="w-full sm:w-auto">
+          <Plus className="mr-2 size-4" />
+          Register Student
+        </Button>
       </div>
 
       {/* Summary Stats */}
@@ -195,26 +327,33 @@ export default function AdminStudentsPage() {
             <div>
               <CardTitle>Student Directory</CardTitle>
               <CardDescription>
-                Showing {filteredStudents.length} of {students.length} students
+                Showing {students.length} of {totalCount.toLocaleString()} matching students
               </CardDescription>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <div className="relative">
+              <div className="relative w-full sm:flex-1">
                 <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
-                  placeholder="Search students..."
+                  placeholder="Search name, phone, email, ID..."
                   value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  className="pl-8 w-64"
+                  onChange={(e) => {
+                    setSearch(e.target.value)
+                    setCurrentPage(1)
+                  }}
+                  className="w-full pl-8 sm:w-md lg:w-xl"
                 />
               </div>
-              <Button variant="outline" size="sm">
-                <Filter className="h-4 w-4" />
-                <span className="hidden sm:inline">Filter</span>
-              </Button>
-              <Button variant="outline" size="sm">
+              <FilterDialog
+                title="Filter students"
+                description="Choose status and course filters, then apply them together."
+                fields={directoryFilterFields}
+                values={{ status: statusFilter, course: courseFilter }}
+                onApply={applyDirectoryFilters}
+                onClear={applyDirectoryFilters}
+              />
+              <Button variant="outline" size="sm" onClick={handleExport} disabled={exporting} className="flex-1 sm:flex-none">
                 <Download className="h-4 w-4" />
-                <span className="hidden sm:inline">Export</span>
+                <span>{exporting ? "Exporting..." : "Export"}</span>
               </Button>
             </div>
           </div>
@@ -238,7 +377,7 @@ export default function AdminStudentsPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {paginatedStudents.map((student) => (
+              {students.map((student) => (
                 <TableRow key={student.id} className="cursor-pointer hover:bg-muted/50">
                   <TableCell className="font-mono text-xs">
                     <Link href={`/admin/student/${student.id}/profile`} className="block">
@@ -297,7 +436,7 @@ export default function AdminStudentsPage() {
                   </TableCell>
                 </TableRow>
               ))}
-              {paginatedStudents.length === 0 && (
+              {students.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={8} className="h-24 text-center">
                     <p className="text-muted-foreground">
@@ -337,6 +476,11 @@ export default function AdminStudentsPage() {
           </div>
         </CardFooter>
       </Card>
+      <AddStudentSheet
+        open={addOpen}
+        onOpenChange={setAddOpen}
+        onSuccess={() => fetchStudents(currentPage, search, statusFilter, courseFilter)}
+      />
     </div>
   );
 }

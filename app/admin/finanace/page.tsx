@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import {
   Card,
   CardHeader,
@@ -57,6 +57,7 @@ import {
 } from "recharts";
 import { tooltipStyle, axisStyle, gridStyle, CHART_PALETTE } from "@/lib/chart-theme";
 import { AddExpenseSheet } from "@/components/admin/add-expense-sheet";
+import { FilterDialog, type FilterField, type FilterValues } from "@/components/admin/filter-dialog";
 
 interface SummaryCard {
   title: string;
@@ -103,6 +104,16 @@ function formatCurrencyINR(value: number): string {
   return `₹${Number(value).toLocaleString("en-IN")}`;
 }
 
+function localDateKey(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`
+}
+
+function defaultFinanceRange() {
+  const today = new Date()
+  const start = new Date(today.getFullYear(), today.getMonth() - 5, 1)
+  return { from: localDateKey(start), to: localDateKey(today) }
+}
+
 export default function AdminFinancePage() {
   const [exportOpen, setExportOpen] = useState(false);
   const [expenseOpen, setExpenseOpen] = useState(false);
@@ -122,6 +133,9 @@ export default function AdminFinancePage() {
   const [allTransactions, setAllTransactions] = useState<RecentTransaction[]>([]);
   const [showAllTxns, setShowAllTxns] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [dateFilters, setDateFilters] = useState(defaultFinanceRange);
+  const pendingFilterFetch = useRef<((success: boolean) => void) | null>(null);
+  const filterFetchSucceeded = useRef(true);
   const [isInProfit, setIsInProfit] = useState(true);
 
   const handleVerify = useCallback(async () => {
@@ -169,10 +183,43 @@ export default function AdminFinancePage() {
 
     async function fetchFinanceData() {
       setDataLoading(true);
+      filterFetchSucceeded.current = true;
+
+      async function fetchTransactions() {
+        const rows: { id: string; date: string; description: string; category: string; amount: number; type: "income" | "expense"; branch_id: string | null; created_at: string }[] = []
+        let offset = 0
+        while (true) {
+          let query = supabase.from("transactions").select("*").order("date", { ascending: false })
+          if (dateFilters.from) query = query.gte("date", dateFilters.from)
+          if (dateFilters.to) query = query.lte("date", dateFilters.to)
+          const result = await query.range(offset, offset + 999)
+          if (result.error) return { data: null, error: result.error }
+          rows.push(...(result.data ?? []))
+          if (!result.data || result.data.length < 1000) break
+          offset += 1000
+        }
+        return { data: rows, error: null }
+      }
+
+      async function fetchPayments() {
+        const rows: { id: string; student_name: string; course_slug: string | null; amount: number; payment_date: string; method: string; status: string; branch_id: string | null }[] = []
+        let offset = 0
+        while (true) {
+          let query = supabase.from("payments").select("id, student_name, course_slug, amount, payment_date, method, status, branch_id").order("payment_date", { ascending: false })
+          if (dateFilters.from) query = query.gte("payment_date", dateFilters.from)
+          if (dateFilters.to) query = query.lte("payment_date", dateFilters.to)
+          const result = await query.range(offset, offset + 999)
+          if (result.error) return { data: null, error: result.error }
+          rows.push(...(result.data ?? []))
+          if (!result.data || result.data.length < 1000) break
+          offset += 1000
+        }
+        return { data: rows, error: null }
+      }
 
       const [transactionsResult, paymentsResult, coursesResult, branchesResult] = await Promise.all([
-        supabase.from("transactions").select("*"),
-        supabase.from("payments").select("id, student_name, course_slug, amount, payment_date, method, status, branch_id"),
+        fetchTransactions(),
+        fetchPayments(),
         supabase.from("courses").select("slug, name"),
         supabase.from("branches").select("id, name"),
       ]);
@@ -192,6 +239,7 @@ export default function AdminFinancePage() {
       ].filter((e): e is NonNullable<typeof e> => e !== null);
 
       if (failures.length > 0) {
+        filterFetchSucceeded.current = false;
         if (!active) return;
         for (const failure of failures) {
           console.error("[finance] query failed:", failure.message);
@@ -374,18 +422,39 @@ export default function AdminFinancePage() {
 
     fetchFinanceData().catch((err) => {
       console.error("[finance] load crashed:", err);
+      filterFetchSucceeded.current = false;
       if (!active) return;
       setDataError("We couldn't load the finance data. Please try again.");
       setDataLoading(false);
+    }).finally(() => {
+      if (!active) return;
+      pendingFilterFetch.current?.(filterFetchSucceeded.current);
+      pendingFilterFetch.current = null;
     });
 
     return () => {
       active = false;
     };
-  }, [authenticated, refreshKey]);
+  }, [authenticated, dateFilters, refreshKey]);
 
   const revenueAccent = isInProfit ? "#22c55e" : "#ef4444";
   const expenseAccent = "#ef4444";
+  const financeFilterFields: FilterField[] = [
+    { key: "from", label: "From date", type: "date", defaultValue: "" },
+    { key: "to", label: "To date", type: "date", defaultValue: "" },
+  ];
+
+  async function applyFinanceFilters(values: FilterValues) {
+    setDataLoading(true);
+    setDataError(null);
+    filterFetchSucceeded.current = true;
+    setDateFilters({ from: values.from || "", to: values.to || "" });
+    setRefreshKey((key) => key + 1);
+    const succeeded = await new Promise<boolean>((resolve) => {
+      pendingFilterFetch.current = resolve;
+    });
+    if (!succeeded) throw new Error("Finance filter request failed")
+  }
 
   return (
     <div className="space-y-6">
@@ -393,12 +462,18 @@ export default function AdminFinancePage() {
       <div className="flex items-center justify-between">
         <div className="space-y-1">
           <h1 className="text-2xl font-bold tracking-tight">Finance</h1>
-          <p className="text-xs text-muted-foreground">
-            Complete financial overview
-          </p>
+          <p className="text-xs text-muted-foreground">Financial overview for the selected period</p>
         </div>
         {authenticated && (
           <div className="flex items-center gap-2">
+            <FilterDialog
+              title="Filter finance"
+              description="Choose a date range for revenue, expenses, and transactions."
+              fields={financeFilterFields}
+              values={dateFilters}
+              onApply={applyFinanceFilters}
+              onClear={applyFinanceFilters}
+            />
             <Button variant="outline" className="gap-2" onClick={() => setExpenseOpen(true)}>
               <Wallet className="h-4 w-4" />
               Add Expense

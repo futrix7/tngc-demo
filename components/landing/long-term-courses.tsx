@@ -17,90 +17,6 @@ interface Course {
   popular?: boolean
 }
 
-/* ── Hardcoded fallback — always shown when Supabase is unreachable ── */
-const FALLBACK_COURSES: Course[] = [
-  {
-    slug: "dca",
-    name: "DCA",
-    duration: "6 Months",
-    description: "Diploma in Computer Applications — the most popular all-round course.",
-    topics: ["MS Office", "Internet", "Tally", "DTP", "Typing"],
-    fees: "₹8,000",
-    fee_numeric: 8000,
-    popular: true,
-  },
-  {
-    slug: "adca",
-    name: "ADCA",
-    duration: "1 Year",
-    description: "Advanced Diploma in Computer Applications with deeper coverage.",
-    topics: ["MS Office", "Tally Prime", "DTP", "HTML", "C Language"],
-    fees: "₹14,000",
-    fee_numeric: 14000,
-    popular: true,
-  },
-  {
-    slug: "python-full-stack",
-    name: "Python Full Stack",
-    duration: "6 Months",
-    description: "Complete web development with Python, Django and modern frontend.",
-    topics: ["Core Python", "Django", "HTML/CSS", "JavaScript", "Live Project"],
-    fees: "₹25,000",
-    fee_numeric: 25000,
-    popular: true,
-  },
-  {
-    slug: "java-full-stack",
-    name: "Java Full Stack",
-    duration: "6 Months",
-    description: "Enterprise web development with Java, Spring Boot and frontend.",
-    topics: ["Core Java", "Spring Boot", "HTML/CSS", "JavaScript", "Live Project"],
-    fees: "₹25,000",
-    fee_numeric: 25000,
-    popular: true,
-  },
-  {
-    slug: "tally-prime",
-    name: "Tally Prime",
-    duration: "3 Months",
-    description: "Industry-standard accounting software for finance careers.",
-    topics: ["GST", "Accounting", "Payroll", "Inventory", "Banking"],
-    fees: "₹6,000",
-    fee_numeric: 6000,
-    popular: false,
-  },
-  {
-    slug: "digital-marketing",
-    name: "Digital Marketing",
-    duration: "3 Months",
-    description: "Modern marketing skills for social media, SEO and online ads.",
-    topics: ["SEO", "Google Ads", "Social Media", "Email", "Analytics"],
-    fees: "₹10,000",
-    fee_numeric: 10000,
-    popular: false,
-  },
-  {
-    slug: "graphic-design",
-    name: "Graphic Design",
-    duration: "3 Months",
-    description: "Creative design for print, digital and branding projects.",
-    topics: ["Photoshop", "Illustrator", "CorelDRAW", "Canva", "Logo Design"],
-    fees: "₹9,000",
-    fee_numeric: 9000,
-    popular: false,
-  },
-  {
-    slug: "hardware-networking",
-    name: "Hardware & Networking",
-    duration: "6 Months",
-    description: "PC assembly, troubleshooting and network administration.",
-    topics: ["PC Assembly", "Windows Server", "Networking", "CCNA Basics", "Troubleshooting"],
-    fees: "₹12,000",
-    fee_numeric: 12000,
-    popular: false,
-  },
-]
-
 /* Colour accent per card index — cycles through student-friendly palette */
 const CARD_ACCENTS = [
   { tag: "border-indigo-500/20 bg-indigo-500/10 text-indigo-600 dark:text-indigo-300", dot: "bg-indigo-500" },
@@ -134,7 +50,7 @@ const cardAnim = {
 } as const
 
 export function LongTermCourses() {
-  const [courses, setCourses] = useState<Course[]>(FALLBACK_COURSES)
+  const [courses, setCourses] = useState<Course[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -149,9 +65,9 @@ export function LongTermCourses() {
           .order("created_at")
 
         if (!active) return
-        if (!error && data && data.length > 0) setCourses(data as Course[])
+        if (!error) setCourses(data ?? [])
       } catch {
-        /* keep fallback */
+        if (active) setCourses([])
       } finally {
         if (active) setLoading(false)
       }
@@ -207,6 +123,8 @@ export function LongTermCourses() {
               <div key={i} className="h-64 animate-pulse rounded-3xl border border-border/60 bg-muted/40" />
             ))}
           </div>
+        ) : courses.length === 0 ? (
+          <p className="mt-12 text-center text-sm text-muted-foreground">No long-term courses are available right now.</p>
         ) : (
           <motion.div
             variants={container}

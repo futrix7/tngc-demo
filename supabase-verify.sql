@@ -27,14 +27,20 @@ AND p.proname IN ('enroll_student_in_course','submit_installment_payments','veri
 'create_fee_schedule','apply_fee_delta')
 ORDER BY p.proname, args;
 
-SELECT p.proname, r.rname
+SELECT p.proname,
+       has_function_privilege('anon', p.oid, 'EXECUTE') AS anon_execute,
+       has_function_privilege('authenticated', p.oid, 'EXECUTE') AS authenticated_execute
 FROM pg_proc p
 JOIN pg_namespace n ON n.oid = p.pronamespace
-JOIN LATERAL unnest(p.proacl) acl ON true
-JOIN pg_roles r ON r.oid = acl.grantee
-WHERE n.nspname = 'public' AND r.rname IN ('anon','authenticated')
-AND p.proname IN ('enroll_student_in_course','submit_installment_payments','verify_installment_payments',
-'mark_installment_paid','unmark_installment');
+WHERE n.nspname = 'public'
+  AND p.proname IN (
+    'enroll_student_in_course',
+    'submit_installment_payments',
+    'verify_installment_payments',
+    'mark_installment_paid',
+    'unmark_installment'
+  )
+ORDER BY p.proname;
 
 SELECT e.enumlabel FROM pg_enum e
 JOIN pg_type t ON t.oid = e.enumtypid

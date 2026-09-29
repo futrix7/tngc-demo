@@ -16,15 +16,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { ArrowLeft, Mail, Phone, Trash2, Loader2, User, CalendarCheck, Wallet, CreditCard, Award, IndianRupee } from "lucide-react"
+import { ArrowLeft, Mail, Phone, Trash2, Loader2, User, Wallet, CreditCard, Award, IndianRupee } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { supabase } from "@/lib/supabase"
 import { useToast } from "@/components/ui/sonner"
+import { AddStudentCourseDialog } from "@/components/admin/add-student-course-dialog"
 
 interface StudentData {
   name: string
   id: string
-  email: string
+  email: string | null
   phone: string
   course: string
   branch: string
@@ -45,7 +46,6 @@ const statusVariant: Record<string, "default" | "secondary" | "destructive" | "o
 
 const navLinks = [
   { label: "Profile", href: "profile", icon: User },
-  { label: "Attendance", href: "attendance", icon: CalendarCheck },
   { label: "Fee", href: "fee", icon: Wallet },
   { label: "Installments", href: "installments", icon: IndianRupee },
   { label: "Payments", href: "payments", icon: CreditCard },
@@ -71,6 +71,7 @@ export default function StudentLayout({
   const [deleteName, setDeleteName] = useState("")
   const [deleteConfirm, setDeleteConfirm] = useState("")
   const [deleting, setDeleting] = useState(false)
+  const [changingStatus, setChangingStatus] = useState(false)
 
   useEffect(() => {
     async function fetchStudent() {
@@ -86,13 +87,23 @@ export default function StudentLayout({
         return
       }
 
-      let courseName = data.course_slug ?? ""
+      const { data: feeRows } = await supabase
+        .from("fees")
+        .select("course_slug")
+        .eq("student_id", id)
+      const courseSlugs = [...new Set([
+        ...(feeRows ?? []).map((fee) => fee.course_slug),
+        data.course_slug,
+      ].filter((slug): slug is string => Boolean(slug)))]
+      let courseName = courseSlugs.join(", ")
       let branchName = data.branch_id ?? ""
 
-      if (data.course_slug) {
+      if (courseSlugs.length > 0) {
         const { data: courseData } = await supabase
-          .from("courses").select("name").eq("slug", data.course_slug).single()
-        if (courseData) courseName = courseData.name
+          .from("courses").select("slug, name").in("slug", courseSlugs)
+        if (courseData?.length) courseName = courseSlugs
+          .map((slug) => courseData.find((course) => course.slug === slug)?.name ?? slug)
+          .join(", ")
       }
       if (data.branch_id) {
         const { data: branchData } = await supabase
@@ -116,6 +127,25 @@ export default function StudentLayout({
 
   const deleteEnabled = student && deleteName === student.name && deleteConfirm === "DELETE"
 
+  async function handleStatusToggle() {
+    if (!student || changingStatus) return
+    const nextStatus = student.status === "Active" ? "Inactive" : "Active"
+    setChangingStatus(true)
+
+    const { error } = await supabase
+      .from("students")
+      .update({ status: nextStatus })
+      .eq("id", student.id)
+
+    if (error) {
+      toast("Unable to update student status: " + error.message, { variant: "destructive" })
+    } else {
+      setStudent((current) => current ? { ...current, status: nextStatus } : current)
+      toast(`${student.name} marked ${nextStatus.toLowerCase()}`, { variant: "success" })
+    }
+    setChangingStatus(false)
+  }
+
   async function handleDelete() {
     if (!deleteEnabled) return
     setDeleting(true)
@@ -128,7 +158,6 @@ export default function StudentLayout({
     }
     await supabase.from("fees").delete().eq("student_id", id)
     await supabase.from("payments").delete().eq("student_id", id)
-    await supabase.from("attendance").delete().eq("student_id", id)
     await supabase.from("certificates").delete().eq("student_id", id)
     await supabase.from("students").delete().eq("id", id)
 
@@ -189,7 +218,7 @@ export default function StudentLayout({
                 <h1 className="text-lg sm:text-xl font-bold">{student.name}</h1>
                 <p className="text-xs text-muted-foreground">{student.id}</p>
                 <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
-                  <span className="flex items-center gap-1"><Mail className="size-3" />{student.email}</span>
+                  <span className="flex items-center gap-1"><Mail className="size-3" />{student.email || "No email on file"}</span>
                   <span className="flex items-center gap-1"><Phone className="size-3" />{student.phone}</span>
                 </div>
               </div>
@@ -197,6 +226,16 @@ export default function StudentLayout({
                 <Badge variant="secondary" className="text-[11px] sm:text-xs">{student.course}</Badge>
                 <Badge variant="secondary" className="text-[11px] sm:text-xs">{student.branch}</Badge>
                 <Badge variant={statusVariant[student.status]} className="text-[11px] sm:text-xs">{student.status}</Badge>
+                <Button variant="outline" size="sm" onClick={handleStatusToggle} disabled={changingStatus}>
+                  {changingStatus ? "Updating..." : student.status === "Active" ? "Deactivate" : "Activate"}
+                </Button>
+                <AddStudentCourseDialog
+                  studentId={student.id}
+                  onSuccess={(courseName) => setStudent((current) => current ? {
+                    ...current,
+                    course: [...new Set([...current.course.split(", ").filter(Boolean), courseName])].join(", "),
+                  } : current)}
+                />
                 <Button
                   variant="destructive"
                   size="lg"

@@ -135,7 +135,7 @@ export interface Database {
           id: string
           user_id: string | null
           full_name: string
-          email: string
+          email: string | null
           phone: string
           date_of_birth: string | null
           gender: "male" | "female" | "other" | null
@@ -157,7 +157,7 @@ export interface Database {
           id: string
           user_id?: string | null
           full_name: string
-          email: string
+          email?: string | null
           phone: string
           date_of_birth?: string | null
           gender?: "male" | "female" | "other" | null
@@ -179,7 +179,7 @@ export interface Database {
           id?: string
           user_id?: string | null
           full_name?: string
-          email?: string
+          email?: string | null
           phone?: string
           date_of_birth?: string | null
           gender?: "male" | "female" | "other" | null
@@ -772,6 +772,10 @@ export interface Database {
           p_signature: string
           p_payment_method: string
           p_payment_description: string
+          p_paid_installment_nos?: number[]
+          p_installment_count?: number
+          p_custom_payment_amount?: number | null
+          p_total_fee_override?: number | null
         }
         Returns: {
           student_id: string
@@ -783,6 +787,11 @@ export interface Database {
         Args: {
           p_user_id: string
           p_course_slug: string
+          p_total_fee_override?: number | null
+          p_initial_payment_amount?: number
+          p_payment_method?: string
+          p_payment_reference?: string
+          p_verified_by?: string
         }
         Returns: {
           fee_id: string
