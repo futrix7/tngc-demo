@@ -1,8 +1,15 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import { PencilLine } from "lucide-react"
-import { FormSheet, FormField } from "@/components/admin/form-sheet"
+import {
+  FormSheet,
+  FormField,
+  SHEET_INPUT_CLASS,
+  SHEET_SELECT_TRIGGER_CLASS,
+  SHEET_SELECT_VALUE_CLASS,
+} from "@/components/admin/form-sheet"
+import { BranchSelect } from "@/components/admin/branch-select"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -37,38 +44,62 @@ interface EditTeacherSheetProps {
 }
 
 export function EditTeacherSheet({ teacher, open, onOpenChange, onSuccess }: EditTeacherSheetProps) {
+  // The form's fields come from one teacher, so it is mounted afresh per teacher
+  // rather than being copied out of props by an effect. The old version did the
+  // copying in a `useEffect`, which meant every edit arrived one commit late:
+  // the sheet first painted the previous teacher's values, then repainted with
+  // this one's — and editing two teachers in a row briefly showed the first
+  // teacher's name in the second's form.
+  if (!teacher) {
+    return (
+      <FormSheet
+        open={open}
+        onOpenChange={onOpenChange}
+        title="Edit Teacher Details"
+        icon={PencilLine}
+        submitLabel="Save Changes"
+        onSubmit={() => undefined}
+      >
+        <p className="text-sm text-muted-foreground">
+          Choose a teacher to edit.
+        </p>
+      </FormSheet>
+    )
+  }
+
+  return (
+    <EditTeacherForm
+      key={teacher.id}
+      teacher={teacher}
+      open={open}
+      onOpenChange={onOpenChange}
+      onSuccess={onSuccess}
+    />
+  )
+}
+
+function EditTeacherForm({
+  teacher,
+  open,
+  onOpenChange,
+  onSuccess,
+}: EditTeacherSheetProps & { teacher: TeacherRecord }) {
   const { toast } = useToast()
-  const [fullName, setFullName] = useState("")
-  const [email, setEmail] = useState("")
-  const [phone, setPhone] = useState("")
-  const [role, setRole] = useState("Teacher")
-  const [qualification, setQualification] = useState("")
-  const [specialization, setSpecialization] = useState("")
-  const [branch, setBranch] = useState("")
-  const [experience, setExperience] = useState("0")
-  const [salary, setSalary] = useState("")
-  const [status, setStatus] = useState<"Active" | "On Leave">("Active")
-  const [subjects, setSubjects] = useState("")
+  const [fullName, setFullName] = useState(() => teacher.full_name ?? "")
+  const [email, setEmail] = useState(() => teacher.email ?? "")
+  const [phone, setPhone] = useState(() => teacher.phone ?? "")
+  const [role, setRole] = useState(() => teacher.role ?? "Teacher")
+  const [qualification, setQualification] = useState(() => teacher.qualification ?? "")
+  const [specialization, setSpecialization] = useState(() => teacher.specialization ?? "")
+  const [branch, setBranch] = useState(() => teacher.branch_id ?? "")
+  const [experience, setExperience] = useState(() => String(teacher.experience ?? 0))
+  const [salary, setSalary] = useState(() => (teacher.salary != null ? String(teacher.salary) : ""))
+  const [status, setStatus] = useState<"Active" | "On Leave">(teacher.status ?? "Active")
+  const [subjects, setSubjects] = useState(() => (teacher.subjects ?? []).join(", "))
   const [saving, setSaving] = useState(false)
 
-  useEffect(() => {
-    if (!teacher) return
-
-    setFullName(teacher.full_name ?? "")
-    setEmail(teacher.email ?? "")
-    setPhone(teacher.phone ?? "")
-    setRole(teacher.role ?? "Teacher")
-    setQualification(teacher.qualification ?? "")
-    setSpecialization(teacher.specialization ?? "")
-    setBranch(teacher.branch_id ?? "")
-    setExperience(String(teacher.experience ?? 0))
-    setSalary(teacher.salary != null ? String(teacher.salary) : "")
-    setStatus(teacher.status ?? "Active")
-    setSubjects((teacher.subjects ?? []).join(", "))
-  }, [teacher, open])
-
   async function handleSubmit() {
-    if (!teacher || !fullName.trim() || !email.trim() || !phone.trim()) {
+    if (!fullName.trim() || !email.trim() || !phone.trim()) {
       toast("Please fill in all required fields", { variant: "destructive" })
       return
     }
@@ -120,21 +151,21 @@ export function EditTeacherSheet({ teacher, open, onOpenChange, onSuccess }: Edi
     >
       <div className="grid grid-cols-2 gap-3">
         <FormField label="Full Name" htmlFor="editTeacherName">
-          <Input id="editTeacherName" value={fullName} onChange={(e) => setFullName(e.target.value)} />
+          <Input id="editTeacherName" className={SHEET_INPUT_CLASS} value={fullName} onChange={(e) => setFullName(e.target.value)} />
         </FormField>
         <FormField label="Email" htmlFor="editTeacherEmail">
-          <Input id="editTeacherEmail" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+          <Input id="editTeacherEmail" className={SHEET_INPUT_CLASS} type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
         </FormField>
       </div>
 
       <div className="grid grid-cols-2 gap-3">
         <FormField label="Phone" htmlFor="editTeacherPhone">
-          <Input id="editTeacherPhone" type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} />
+          <Input id="editTeacherPhone" className={SHEET_INPUT_CLASS} type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} />
         </FormField>
         <FormField label="Role">
           <Select value={role} onValueChange={(value) => setRole(value || "Teacher")}>
-            <SelectTrigger>
-              <SelectValue placeholder="Select role" />
+            <SelectTrigger className={SHEET_SELECT_TRIGGER_CLASS}>
+              <SelectValue className={SHEET_SELECT_VALUE_CLASS} placeholder="Select role" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="Teacher">Teacher</SelectItem>
@@ -148,8 +179,8 @@ export function EditTeacherSheet({ teacher, open, onOpenChange, onSuccess }: Edi
       <div className="grid grid-cols-2 gap-3">
         <FormField label="Qualification">
           <Select value={qualification} onValueChange={(value) => setQualification(value ?? "")}>
-            <SelectTrigger>
-              <SelectValue placeholder="Select qualification" />
+            <SelectTrigger className={SHEET_SELECT_TRIGGER_CLASS}>
+              <SelectValue className={SHEET_SELECT_VALUE_CLASS} placeholder="Select qualification" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="B.Tech">B.Tech</SelectItem>
@@ -163,8 +194,8 @@ export function EditTeacherSheet({ teacher, open, onOpenChange, onSuccess }: Edi
         </FormField>
         <FormField label="Specialization">
           <Select value={specialization} onValueChange={(value) => setSpecialization(value ?? "")}>
-            <SelectTrigger>
-              <SelectValue placeholder="Select specialization" />
+            <SelectTrigger className={SHEET_SELECT_TRIGGER_CLASS}>
+              <SelectValue className={SHEET_SELECT_VALUE_CLASS} placeholder="Select specialization" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="Java">Java</SelectItem>
@@ -180,21 +211,12 @@ export function EditTeacherSheet({ teacher, open, onOpenChange, onSuccess }: Edi
 
       <div className="grid grid-cols-2 gap-3">
         <FormField label="Branch">
-          <Select value={branch} onValueChange={(value) => setBranch(value ?? "")}>
-            <SelectTrigger>
-              <SelectValue placeholder="Select branch" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="ramanthapur">Ramanthapur</SelectItem>
-              <SelectItem value="amberpet">Amberpet</SelectItem>
-              <SelectItem value="kodad">Kodad</SelectItem>
-            </SelectContent>
-          </Select>
+          <BranchSelect value={branch} onChange={setBranch} />
         </FormField>
         <FormField label="Status">
           <Select value={status} onValueChange={(value) => setStatus((value as "Active" | "On Leave") || "Active")}>
-            <SelectTrigger>
-              <SelectValue placeholder="Select status" />
+            <SelectTrigger className={SHEET_SELECT_TRIGGER_CLASS}>
+              <SelectValue className={SHEET_SELECT_VALUE_CLASS} placeholder="Select status" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="Active">Active</SelectItem>
@@ -206,15 +228,15 @@ export function EditTeacherSheet({ teacher, open, onOpenChange, onSuccess }: Edi
 
       <div className="grid grid-cols-2 gap-3">
         <FormField label="Experience" htmlFor="editTeacherExperience">
-          <Input id="editTeacherExperience" type="number" min="0" value={experience} onChange={(e) => setExperience(e.target.value)} />
+          <Input id="editTeacherExperience" className={SHEET_INPUT_CLASS} type="number" min="0" value={experience} onChange={(e) => setExperience(e.target.value)} />
         </FormField>
         <FormField label="Monthly Salary" htmlFor="editTeacherSalary">
-          <Input id="editTeacherSalary" type="number" min="0" step="0.01" value={salary} onChange={(e) => setSalary(e.target.value)} />
+          <Input id="editTeacherSalary" className={SHEET_INPUT_CLASS} type="number" min="0" step="0.01" value={salary} onChange={(e) => setSalary(e.target.value)} />
         </FormField>
       </div>
 
       <FormField label="Subjects" htmlFor="editTeacherSubjects">
-        <Input id="editTeacherSubjects" placeholder="Java, Python, Web Development" value={subjects} onChange={(e) => setSubjects(e.target.value)} />
+        <Input id="editTeacherSubjects" className={SHEET_INPUT_CLASS} placeholder="Java, Python, Web Development" value={subjects} onChange={(e) => setSubjects(e.target.value)} />
       </FormField>
     </FormSheet>
   )

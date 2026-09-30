@@ -6,19 +6,20 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
-import { Progress } from "@/components/ui/progress"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Award, BookOpen, CheckCircle2, Clock, CreditCard, ExternalLink, Loader2, Plus, ShieldQuestion, XCircle } from "lucide-react"
 import Link from "next/link"
 import { supabase } from "@/lib/supabase"
 import { useToast } from "@/components/ui/sonner"
 import { AWAITING_VERIFICATION, PAYMENT_REJECTED } from "@/lib/payment-status"
 import { UpiPayBlock } from "@/components/student/upi-pay-block"
+import { AmountSplit, MAX_SPLIT_PARTS, readAmountParts } from "@/components/shared/amount-split"
 
 interface Installment {
   id: string
-  ids: string[]
-  payableIds: string[]
+  feeId: string
+  courseSlug: string | null
+  courseName: string
   label: string
   amount: number
   paidAmount: number
@@ -31,21 +32,37 @@ interface Installment {
   awaitingVerification: boolean
 }
 
-interface Extra {
-  label: string
-  amount: number
-  status: "Paid" | "Pending"
+/**
+ * One row per enrolled course. A student asks "how much is left on the course I
+ * am doing", and the answer is paid against pending — not a total across every
+ * course they have ever enrolled in, which is what this page used to lead with
+ * and what made a student with two courses unable to tell which one to pay.
+ */
+interface CourseBalance {
+  /** The fees row id — what a payment is claimed against. */
+  feeId: string
+  slug: string
+  name: string
+  totalFee: number
+  paid: number
+  pending: number
+  /**
+   * What the student can still pay right now. Less than `pending`, because a
+   * claim already with the institute is spoken for and paying it again is how a
+   * student ends up out of pocket twice.
+   */
+  payable: number
 }
 
 interface FeeData {
   course: string
   courseSlugs: string[]
   certifiableCourseSlugs: string[]
+  courses: CourseBalance[]
   totalFee: number
   paid: number
   pending: number
   installments: Installment[]
-  extras: Extra[]
 }
 
 interface AvailableCourse {
@@ -67,11 +84,11 @@ const fallbackFeeDetails: FeeData = {
   course: "Course",
   courseSlugs: [],
   certifiableCourseSlugs: [],
+  courses: [],
   totalFee: 0,
   paid: 0,
   pending: 0,
   installments: [],
-  extras: [],
 }
 
 export default function StudentFee() {
@@ -96,19 +113,27 @@ export default function StudentFee() {
     installmentId: string | null
   }[]>([])
 
-  const paidPct = feeDetails.totalFee > 0 ? Math.round((feeDetails.paid / feeDetails.totalFee) * 100) : 0
-  const extrasTotal = feeDetails.extras.reduce((sum, e) => sum + e.amount, 0)
-
   const [payOpen, setPayOpen] = useState(false)
   const [method, setMethod] = useState("upi")
   const [reference, setReference] = useState("")
-  const [paymentAmount, setPaymentAmount] = useState("")
+  /**
+   * Which course the student is paying towards, and how much.
+   *
+   * One course and one figure, because that is what "I am paying ₹2,000 of my
+   * ₹5,000 fee" means. There is deliberately no per-installment selection and no
+   * per-installment box: the student is not asked to decide how their own money
+   * divides, and the two parallel lists of boxes were the same payment being
+   * described two ways on one screen. Whatever they type is exactly what gets
+   * claimed, and the schedule below says when the rest falls due.
+   */
+  const [payCourseId, setPayCourseId] = useState("")
+  const [payAmount, setPayAmount] = useState("")
   const [paid, setPaid] = useState(false)
   const [paying, setPaying] = useState(false)
-  const [selectedInstallmentKeys, setSelectedInstallmentKeys] = useState<string[]>([])
   const [enrollOpen, setEnrollOpen] = useState(false)
   const [availableCourses, setAvailableCourses] = useState<AvailableCourse[]>([])
   const [selectedCourseSlug, setSelectedCourseSlug] = useState("")
+  const [enrollAmounts, setEnrollAmounts] = useState<string[]>([""])
   const [loadingCourses, setLoadingCourses] = useState(false)
   const [enrolling, setEnrolling] = useState(false)
 
@@ -203,13 +228,35 @@ export default function StudentFee() {
 
       const feeIds = rows.map((r) => r.id)
 
-      const [installmentsRes, extrasRes] = await Promise.all([
+      // Course names are needed before anything is grouped, since every balance
+      // on this page is reported against the course it belongs to.
+      const slugs = [...new Set(rows.map((r) => r.course_slug).filter((s): s is string => Boolean(s)))]
+
+      let namesBySlug: Record<string, string> = {}
+      if (slugs.length > 0) {
+        const { data: courseRows, error: courseError } = await supabase
+          .from("courses")
+          .select("slug, name")
+          .in("slug", slugs)
+
+        if (courseError) {
+          console.error("[fee] course lookup failed:", courseError.message)
+        } else if (courseRows && courseRows.length > 0) {
+          namesBySlug = Object.fromEntries(
+            courseRows.map((c) => [c.slug as string, c.name as string])
+          )
+        }
+      }
+
+      const feeById = new Map(rows.map((r) => [r.id, r]))
+      const nameFor = (slug: string | null) => (slug ? namesBySlug[slug] ?? slug : "Course")
+
+      const [installmentsRes] = await Promise.all([
         supabase.from("fee_installments").select("*").in("fee_id", feeIds),
-        supabase.from("fee_extras").select("*").in("fee_id", feeIds),
       ])
 
-      for (const failure of [installmentsRes.error, extrasRes.error]) {
-        if (failure) console.error("[fee] schedule lookup failed:", failure.message)
+      if (installmentsRes.error) {
+        console.error("[fee] schedule lookup failed:", installmentsRes.error.message)
       }
 
       // Which installments already have an unreviewed claim against them. Without
@@ -251,89 +298,71 @@ export default function StudentFee() {
           (paidByInstallment[payment.installment_id] ?? 0) + Number(payment.amount)
       }
 
-      const individualInstallments: Installment[] = (installmentsRes.data ?? [])
+      // One row per installment, kept as itself. These used to be merged by the
+      // number at the end of their label, so "Installment 1" of two different
+      // courses became one line with the sum of both — a student enrolled in
+      // two courses was shown a single figure that belonged to neither, and a
+      // payment against it could not be traced back to a course at all.
+      const installments: Installment[] = (installmentsRes.data ?? [])
         .map((i) => {
           const amount = Number(i.amount)
           const ledgerPaid = paidByInstallment[i.id] ?? 0
           const paidAmount = Math.min(amount, i.status === "Paid" ? Math.max(ledgerPaid, amount) : ledgerPaid)
           const balance = Math.max(0, Number((amount - paidAmount).toFixed(2)))
+          const awaitingVerification = claimedIds.has(i.id as string)
+          const feeRow = feeById.get(i.fee_id as string)
 
           return {
             id: i.id as string,
-            ids: [i.id as string],
-            payableIds: balance > 0 && !claimedIds.has(i.id as string) ? [i.id as string] : [],
+            feeId: i.fee_id as string,
+            courseSlug: (feeRow?.course_slug ?? null) as string | null,
+            courseName: nameFor((feeRow?.course_slug ?? null) as string | null),
             label: i.label,
             amount,
             paidAmount,
             balance,
-            payableBalance: balance > 0 && !claimedIds.has(i.id as string) ? balance : 0,
+            payableBalance: balance > 0 && !awaitingVerification ? balance : 0,
             dueDate: i.due_date,
             paidDate: i.paid_date,
             status: balance === 0 ? "Paid" as const : paidAmount > 0 ? "Partial" as const : "Pending" as const,
-            awaitingVerification: claimedIds.has(i.id as string),
+            awaitingVerification,
           }
         })
-        .sort((a, b) => a.dueDate.localeCompare(b.dueDate))
-
-      const groupedInstallments = new Map<string, Installment>()
-      for (const installment of individualInstallments) {
-        const installmentNumber = installment.label.match(/(\d+)\s*$/)?.[1]
-        const groupKey = installmentNumber ? `installment-${installmentNumber}` : installment.label
-        const existing = groupedInstallments.get(groupKey)
-
-        if (!existing) {
-          groupedInstallments.set(groupKey, {
-            ...installment,
-            id: groupKey,
-            label: installmentNumber ? `Installment ${installmentNumber}` : installment.label,
-          })
-          continue
-        }
-
-        existing.ids.push(...installment.ids)
-        existing.payableIds.push(...installment.payableIds)
-        existing.amount += installment.amount
-        existing.paidAmount += installment.paidAmount
-        existing.balance += installment.balance
-        existing.payableBalance += installment.payableBalance
-        existing.awaitingVerification ||= installment.awaitingVerification
-        existing.dueDate = existing.dueDate < installment.dueDate ? existing.dueDate : installment.dueDate
-        if (installment.paidDate && (!existing.paidDate || installment.paidDate > existing.paidDate)) {
-          existing.paidDate = installment.paidDate
-        }
-        existing.status = existing.balance === 0 ? "Paid" : existing.paidAmount > 0 ? "Partial" : "Pending"
-      }
-
-      const installments = [...groupedInstallments.values()]
-        .sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.label.localeCompare(b.label))
-
-      const extras: Extra[] = (extrasRes.data ?? []).map((e) => ({
-        label: e.label,
-        amount: e.amount,
-        status: e.status === "Paid" ? "Paid" : "Pending",
-      }))
-
-      // Named from the fee rows rather than students.course_slug, which only ever
-      // holds the first course of the enrolment.
-      const slugs = [...new Set(rows.map((r) => r.course_slug).filter((s): s is string => Boolean(s)))]
-
-      let courseName = "Course"
-      if (slugs.length > 0) {
-        const { data: courseRows, error: courseError } = await supabase
-          .from("courses")
-          .select("slug, name")
-          .in("slug", slugs)
-
-        if (courseError) {
-          console.error("[fee] course lookup failed:", courseError.message)
-        } else if (courseRows && courseRows.length > 0) {
-          courseName = courseRows.map((c) => c.name).join(", ")
-        }
-      }
+        .sort(
+          (a, b) =>
+            a.courseName.localeCompare(b.courseName) ||
+            a.dueDate.localeCompare(b.dueDate) ||
+            a.label.localeCompare(b.label)
+        )
 
       const totalFee = rows.reduce((sum, r) => sum + Number(r.total_fee), 0)
       const totalPaid = rows.reduce((sum, r) => sum + Number(r.paid_amount), 0)
       const totalPending = rows.reduce((sum, r) => sum + Number(r.pending_amount), 0)
+
+      // payable is worked out per course from its own installments, so a course
+      // with a claim already in flight shows less owing than its raw pending
+      // figure suggests. Reading pending_amount alone would invite a second claim
+      // for money the institute is already holding.
+      const payableByFee = new Map<string, number>()
+      for (const installment of installments) {
+        payableByFee.set(
+          installment.feeId,
+          Number(((payableByFee.get(installment.feeId) ?? 0) + installment.payableBalance).toFixed(2))
+        )
+      }
+
+      const courses: CourseBalance[] = rows
+        .map((fee) => ({
+          feeId: fee.id,
+          slug: fee.course_slug as string,
+          name: nameFor(fee.course_slug),
+          totalFee: Number(fee.total_fee),
+          paid: Number(fee.paid_amount),
+          pending: Number(fee.pending_amount),
+          payable: payableByFee.get(fee.id) ?? Number(fee.pending_amount),
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name))
+
       const schedulesByFee = new Map<string, string[]>()
       for (const installment of installmentsRes.data ?? []) {
         const statuses = schedulesByFee.get(installment.fee_id) ?? []
@@ -348,15 +377,17 @@ export default function StudentFee() {
         })
         .map((fee) => fee.course_slug as string)
 
+      const courseName = courses.map((c) => c.name).join(", ") || "Course"
+
       setFeeDetails({
         course: courseName,
         courseSlugs: slugs,
         certifiableCourseSlugs,
+        courses,
         totalFee,
         paid: totalPaid,
         pending: totalPending,
         installments,
-        extras,
       })
 
       setLoading(false)
@@ -394,6 +425,28 @@ export default function StudentFee() {
 
   async function handleAddCourse() {
     if (enrolling || !selectedCourseSlug) return
+
+    const course = availableCourses.find((item) => item.slug === selectedCourseSlug)
+    const split = readAmountParts(enrollAmounts)
+
+    if (split.error) {
+      toast(split.error, { variant: "destructive" })
+      return
+    }
+
+    if (split.amounts.length > 0 && course) {
+      const sum = Number(
+        split.amounts.reduce((total, part) => total + part, 0).toFixed(2)
+      )
+      if (Math.abs(sum - course.fee) > 0.005) {
+        toast(
+          `The installments must add up to ₹${course.fee.toLocaleString("en-IN")}. They add up to ₹${sum.toLocaleString("en-IN")}.`,
+          { variant: "destructive" }
+        )
+        return
+      }
+    }
+
     setEnrolling(true)
 
     try {
@@ -411,7 +464,10 @@ export default function StudentFee() {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ courseSlug: selectedCourseSlug }),
+        body: JSON.stringify({
+          courseSlug: selectedCourseSlug,
+          installmentAmounts: split.amounts.length > 0 ? split.amounts : null,
+        }),
       })
       const result = (await response.json()) as { error?: string; totalFee?: number }
 
@@ -420,10 +476,11 @@ export default function StudentFee() {
         return
       }
 
-      const courseName = availableCourses.find((course) => course.slug === selectedCourseSlug)?.name
+      const courseName = course?.name
       toast(`${courseName ?? "Course"} added. Its installment schedule is ready.`, { variant: "success" })
       setEnrollOpen(false)
       setSelectedCourseSlug("")
+      setEnrollAmounts([""])
       setRefreshKey((key) => key + 1)
     } catch {
       toast("We couldn't add that course. Please try again.", { variant: "destructive" })
@@ -437,10 +494,11 @@ export default function StudentFee() {
     return d < new Date()
   }
 
-  /** Outstanding installments a student can still pay, in schedule order. */
-  const payableInstallments = feeDetails.installments.filter(
-    (i) => i.payableBalance > 0 && !i.awaitingVerification
-  )
+  /**
+   * Courses with something left to pay, largest balance first so the biggest
+   * bill is the one a student lands on.
+   */
+  const payableCourses = feeDetails.courses.filter((course) => course.payable > 0)
 
   /**
    * Refused claims, resolved to installment names. The payment rows only carry
@@ -456,57 +514,68 @@ export default function StudentFee() {
       rejectedClaims
         .map((c) => c.installmentId)
         .filter((id): id is string => Boolean(id))
-        .map((id) => feeDetails.installments.find((i) => i.ids.includes(id))?.label)
+        .map((id) => feeDetails.installments.find((i) => i.id === id)?.label)
         .filter((label): label is string => Boolean(label))
     ),
   ]
   const rejectedTotal = rejectedClaims.reduce((sum, c) => sum + c.amount, 0)
 
-  const selectedInstallments = payableInstallments
-    .filter((i) => selectedInstallmentKeys.includes(i.id))
-  const selectedIds = selectedInstallments.flatMap((i) => i.payableIds)
-  const selectedTotal = selectedInstallments
-    .reduce((sum, i) => sum + i.payableBalance, 0)
-  const allPayableTotal = payableInstallments.reduce((sum, i) => sum + i.payableBalance, 0)
-  const displayedPaymentAmount = paymentAmount.trim()
-    ? Number(paymentAmount)
-    : selectedTotal > 0 ? selectedTotal : allPayableTotal
+  const payingCourse = payableCourses.find((course) => course.feeId === payCourseId) ?? null
 
-  const MAX_SELECTED = 3
+  // An emptied box means nothing is being claimed, not "the whole balance". The
+  // field arrives pre-filled, so a blank can only come from clearing it — and
+  // quietly reading that as "pay it all" would be the worst possible guess.
+  const payTotal = Number((payAmount.trim() === "" ? 0 : Number(payAmount) || 0).toFixed(2))
 
-  function toggleInstallment(key: string) {
-    setPaymentAmount("")
-    setSelectedInstallmentKeys((prev) => {
-      if (prev.includes(key)) return prev.filter((x) => x !== key)
-      if (prev.length >= MAX_SELECTED) {
-        toast(`You can pay up to ${MAX_SELECTED} installments at a time.`, { variant: "warning" })
-        return prev
-      }
-      return [...prev, key]
-    })
+  /**
+   * The one thing worth refusing before a request is made: a figure larger than
+   * what is actually owing. Paying more is not a bigger payment, it is a second
+   * claim for money already claimed.
+   */
+  const payProblem =
+    !payingCourse
+      ? "Choose a course to pay towards."
+      : payAmount.trim() === ""
+        ? null
+        : !Number.isFinite(Number(payAmount)) || Number(payAmount) <= 0
+          ? "Enter an amount greater than zero."
+          : Number(payAmount) > payingCourse.payable + 0.005
+            ? `${payingCourse.name} still owes ₹${payingCourse.payable.toLocaleString("en-IN")}. Enter a figure up to that.`
+            : null
+
+  /** Opens the dialog with the course pre-chosen and the box showing what is owed. */
+  function openPayDialog(courseId?: string) {
+    const target = courseId ?? payableCourses[0]?.feeId ?? ""
+    setPayCourseId(target)
+    const course = payableCourses.find((item) => item.feeId === target)
+    setPayAmount(course ? String(course.payable) : "")
+    setReference("")
+    setMethod("upi")
+    setPayOpen(true)
   }
 
-  async function handlePay(payAll = false) {
+  function changePayCourse(nextFeeId: string) {
+    setPayCourseId(nextFeeId)
+    const course = payableCourses.find((item) => item.feeId === nextFeeId)
+    // Re-offered as what is owed on the newly chosen course, not carried over: a
+    // figure from a different course is not a figure this student meant.
+    setPayAmount(course ? String(course.payable) : "")
+  }
+
+  async function handlePay() {
     if (paying || !studentId) return
 
-    if (!payAll && selectedInstallmentKeys.length === 0) {
-      toast("Select at least one installment to pay.", { variant: "warning" })
-      return
-    }
-
-    const availableBalance = payAll ? allPayableTotal : selectedTotal
-    const amount = paymentAmount.trim() ? Number(paymentAmount) : availableBalance
-    if (!Number.isFinite(amount) || amount <= 0 || amount > availableBalance) {
-      toast(`Enter an amount up to ₹${availableBalance.toLocaleString("en-IN")} for this selection.`, { variant: "warning" })
+    if (!payingCourse || payProblem || payTotal <= 0) {
+      if (payProblem) toast(payProblem, { variant: "warning" })
+      else if (payTotal <= 0) toast("Enter an amount greater than zero.", { variant: "warning" })
       return
     }
 
     setPaying(true)
 
     try {
-      // The endpoint verifies the session server-side and resolves the
-      // outstanding set itself when payAll is set, rather than trusting a list
-      // of ids from the browser.
+      // The endpoint verifies the session server-side and reads the fee balance
+      // from the database, so nothing about what is owed is trusted from here.
       const { data: sessionData } = await supabase.auth.getSession()
       const token = sessionData.session?.access_token
 
@@ -516,6 +585,9 @@ export default function StudentFee() {
         return
       }
 
+      // One figure, sent exactly as typed. Which schedule line it lands on is
+      // settled server-side, oldest first, so the student never has to divide
+      // their own payment across the fee.
       const res = await fetch("/api/installments/submit", {
         method: "POST",
         headers: {
@@ -523,9 +595,8 @@ export default function StudentFee() {
           Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
-          installmentIds: payAll ? undefined : selectedIds,
-          payAll,
-          amount,
+          feeId: payingCourse.feeId,
+          amount: payTotal,
           method,
           reference,
         }),
@@ -544,14 +615,14 @@ export default function StudentFee() {
       // The claim is filed, not settled. Say so plainly — the balance only moves
       // once the institute verifies the reference.
       toast(
-        `₹${(json.amount ?? 0).toLocaleString("en-IN")} claimed for ${json.count} installment${json.count === 1 ? "" : "s"}. Awaiting verification.`,
+        `₹${(json.amount ?? payTotal).toLocaleString("en-IN")} claimed for ${payingCourse.name}. Awaiting verification.`,
         { variant: "success", duration: 6000 }
       )
 
-      setSelectedInstallmentKeys([])
       setReference("")
-      setPaymentAmount("")
+      setPayAmount("")
       setPaid(true)
+      setRefreshKey((key) => key + 1)
       setTimeout(() => {
         setPayOpen(false)
         setTimeout(() => {
@@ -605,27 +676,28 @@ export default function StudentFee() {
             <span className="sm:hidden">History</span>
           </Link>
           {feeDetails.certifiableCourseSlugs.length > 0 && (
-            <Link href="/student/profile/certificates" className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-2 text-sm font-medium hover:bg-muted transition-colors">
+            <Link href="/student/certificates" className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-2 text-sm font-medium hover:bg-muted transition-colors">
               <Award className="size-4" />
               <span>Request Certificate</span>
             </Link>
           )}
+          <Button
+            size="sm"
+            className="gap-1.5 px-3 py-2 text-sm h-auto"
+            onClick={() => openPayDialog()}
+            disabled={payableCourses.length === 0}
+          >
+            <CreditCard className="size-4" />
+            Pay Now
+          </Button>
           <Dialog open={payOpen} onOpenChange={setPayOpen}>
-            <DialogTrigger
-              render={
-                <Button
-                  size="sm"
-                  className="gap-1.5 px-3 py-2 text-sm h-auto"
-                  disabled={feeDetails.pending <= 0}
-                />
-              }
-            >
-              <CreditCard className="size-4" />
-              Pay Now
-            </DialogTrigger>
             <DialogContent className="w-[calc(100%-1rem)] max-w-[calc(100%-1rem)] max-h-[85dvh] overflow-y-auto sm:max-w-lg">
               <DialogHeader>
                 <DialogTitle>Make a Payment</DialogTitle>
+                <DialogDescription>
+                  Pay any amount you like towards your fee. Whatever is left stays owing, and you can
+                  come back and pay the rest whenever you can.
+                </DialogDescription>
               </DialogHeader>
               {paid ? (
                 <div className="py-8 text-center space-y-3">
@@ -637,74 +709,87 @@ export default function StudentFee() {
                     Our team will verify your reference and your balance will update.
                   </p>
                 </div>
-              ) : payableInstallments.length === 0 ? (
+              ) : payableCourses.length === 0 ? (
                 <div className="py-8 text-center text-sm text-muted-foreground">
-                  {feeDetails.installments.length === 0
-                    ? "You have no installment schedule yet."
-                    : "Every installment is either paid or already awaiting verification."}
+                  {feeDetails.courses.length === 0
+                    ? "You have no fee to pay yet."
+                    : "Nothing is payable right now — everything is either paid or already awaiting verification."}
                 </div>
               ) : (
                 <div className="space-y-4 pt-2">
-                  <div className="space-y-2">
-                    <Label>Choose up to three installment positions</Label>
-
-                    <div className="space-y-2">
-                      {payableInstallments.map((inst) => {
-                        const checked = selectedInstallmentKeys.includes(inst.id)
-                        const atCap = !checked && selectedInstallmentKeys.length >= MAX_SELECTED
-                        return (
-                          <label
-                            key={inst.id}
-                            className={`flex items-center justify-between rounded-lg border p-3 transition-colors ${
-                              checked
-                                ? "border-primary bg-primary/5"
-                                : atCap
-                                  ? "cursor-not-allowed border-border opacity-50"
-                                  : "cursor-pointer border-border hover:bg-muted/50"
-                            }`}
-                          >
-                            <div className="flex items-center gap-3">
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                disabled={atCap}
-                                onChange={() => toggleInstallment(inst.id)}
-                                className="size-4 accent-primary"
-                              />
-                              <div>
-                                <p className="text-sm font-medium">{inst.label}</p>
-                                <p className="text-xs text-muted-foreground">Due {inst.dueDate}</p>
-                              </div>
-                            </div>
-                            <p className="text-sm font-semibold">
-                              ₹{inst.payableBalance.toLocaleString("en-IN")}
-                            </p>
-                          </label>
-                        )
-                      })}
+                  {/* Opening a pay dialog with a course named needs that course
+                      selected, otherwise the amount shown would belong to a
+                      different course than the one the button came from. */}
+                  {payOpen && !payingCourse && payableCourses[0] && (
+                    <div className="rounded-lg bg-muted/40 p-3 text-xs text-muted-foreground">
+                      Choose a course to pay towards.
                     </div>
-
-                    <p className="text-xs text-muted-foreground">
-                      You can pay any amount up to the selected balance. It is applied in due-date order.
-                    </p>
-                  </div>
+                  )}
+                  {/* Only worth a chooser when there is a choice to make. */}
+                  {payableCourses.length > 1 ? (
+                    <div className="space-y-2">
+                      <Label htmlFor="pay-course">Course</Label>
+                      <select
+                        id="pay-course"
+                        value={payCourseId}
+                        onChange={(event) => changePayCourse(event.target.value)}
+                        className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                      >
+                        {payableCourses.map((course) => (
+                          <option key={course.feeId} value={course.feeId}>
+                            {course.name} — ₹{course.payable.toLocaleString("en-IN")} owing
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : payingCourse && (
+                    <p className="text-sm font-medium">{payingCourse.name}</p>
+                  )}
 
                   <div className="space-y-2">
-                    <Label htmlFor="payment-amount">Custom amount</Label>
-                    <Input
-                      id="payment-amount"
-                      type="number"
-                      inputMode="decimal"
-                      min="0.01"
-                      max={allPayableTotal}
-                      step="0.01"
-                      value={paymentAmount}
-                      onChange={(event) => setPaymentAmount(event.target.value)}
-                      placeholder={`Up to ₹${(selectedTotal || allPayableTotal).toLocaleString("en-IN")}`}
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      Leave blank to pay the full selected balance. With no selection, this amount is applied across all outstanding installments.
-                    </p>
+                    <Label htmlFor="pay-amount">Amount</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        id="pay-amount"
+                        type="number"
+                        inputMode="decimal"
+                        min="0.01"
+                        max={payingCourse?.payable}
+                        step="0.01"
+                        value={payAmount}
+                        placeholder="0"
+                        aria-label="Amount you are paying"
+                        aria-invalid={Boolean(payProblem)}
+                        onChange={(event) => setPayAmount(event.target.value)}
+                        className={payProblem ? "h-10 border-destructive" : "h-10"}
+                      />
+                      {payingCourse && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="shrink-0"
+                          onClick={() => setPayAmount(String(payingCourse.payable))}
+                          disabled={Number(payAmount) === payingCourse.payable}
+                        >
+                          Pay it all
+                        </Button>
+                      )}
+                    </div>
+                    {payingCourse && !payProblem && (
+                      <p className="text-xs text-muted-foreground">
+                        Any figure up to ₹{payingCourse.payable.toLocaleString("en-IN")}.
+                        {payTotal > 0 && (
+                          <>
+                            {" "}
+                            ₹{(payingCourse.payable - payTotal).toLocaleString("en-IN")} will still be owing
+                            afterwards.
+                          </>
+                        )}
+                      </p>
+                    )}
+                    {payProblem && (
+                      <p className="text-xs font-medium text-destructive">{payProblem}</p>
+                    )}
                   </div>
 
                   <div className="space-y-2">
@@ -748,7 +833,7 @@ export default function StudentFee() {
                       with cash, or transferring from a bank branch. */}
                   {method === "upi" && (
                     <UpiPayBlock
-                      amount={displayedPaymentAmount > 0 ? displayedPaymentAmount : null}
+                      amount={payTotal > 0 ? payTotal : null}
                       note="Pay the amount above, then confirm. Our team verifies the reference before the balance updates."
                     />
                   )}
@@ -756,8 +841,8 @@ export default function StudentFee() {
                   <div className="space-y-2">
                     <Button
                       className="w-full gap-2"
-                      onClick={() => handlePay(false)}
-                      disabled={paying || selectedInstallmentKeys.length === 0 || displayedPaymentAmount > selectedTotal}
+                      onClick={handlePay}
+                      disabled={paying || !payingCourse || Boolean(payProblem) || payTotal <= 0}
                     >
                       {paying ? (
                         <>
@@ -767,23 +852,10 @@ export default function StudentFee() {
                       ) : (
                         <>
                           <CreditCard className="size-4" />
-                          Pay ₹{displayedPaymentAmount.toLocaleString("en-IN")}
-                          {selectedInstallmentKeys.length > 0 && ` (${selectedInstallmentKeys.length})`}
+                          Pay ₹{payTotal.toLocaleString("en-IN")}
                         </>
                       )}
                     </Button>
-
-                    {payableInstallments.length > MAX_SELECTED && selectedInstallmentKeys.length === 0 && (
-                      <Button
-                        variant="outline"
-                        className="w-full gap-2"
-                        onClick={() => handlePay(true)}
-                        disabled={paying || displayedPaymentAmount > allPayableTotal}
-                      >
-                        <CheckCircle2 className="size-4" />
-                        Pay all outstanding (₹{displayedPaymentAmount.toLocaleString("en-IN")})
-                      </Button>
-                    )}
                   </div>
                 </div>
               )}
@@ -826,9 +898,17 @@ export default function StudentFee() {
                   </div>
 
                   {selectedCourseSlug && (
-                    <p className="rounded-lg bg-muted/50 p-3 text-sm text-muted-foreground">
-                      {availableCourses.find((course) => course.slug === selectedCourseSlug)?.name} will be added with a three-installment schedule.
-                    </p>
+                    <AmountSplit
+                      compact
+                      values={enrollAmounts}
+                      onChange={setEnrollAmounts}
+                      label="How would you like the fee scheduled?"
+                      target={
+                        availableCourses.find((course) => course.slug === selectedCourseSlug)?.fee ?? null
+                      }
+                      partLabels={Array.from({ length: Math.max(enrollAmounts.length, 1) }, (_, i) => `Installment ${i + 1}`)}
+                      hint={`Up to ${MAX_SPLIT_PARTS}, in your own amounts. Leave every box blank and the whole fee becomes one line you can pay any part of later.`}
+                    />
                   )}
 
                   <Button className="w-full gap-2" onClick={handleAddCourse} disabled={enrolling || !selectedCourseSlug}>
@@ -887,31 +967,87 @@ export default function StudentFee() {
         </div>
       )}
 
-      {/* Overview */}
-      <Card className="bg-linear-to-br from-primary/10 to-primary/5 border-primary/20">
+      {/* Per-course balances. What a student asks for is "what is left on the
+          course I am doing", and a single combined figure across every course
+          cannot be paid against any one of them. */}
+      <Card>
         <CardContent className="p-5 sm:p-6 lg:p-8">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-4 lg:mb-6">
-            <div>
-              <p className="text-sm lg:text-base text-muted-foreground">Total Fee</p>
-              <p className="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight">₹{feeDetails.totalFee.toLocaleString()}</p>
-            </div>
-            <div className="text-left sm:text-right">
-              <p className="text-sm lg:text-base text-muted-foreground">Paid</p>
-              <p className="text-3xl sm:text-4xl lg:text-5xl font-bold text-emerald-600 tracking-tight">₹{feeDetails.paid.toLocaleString()}</p>
-            </div>
+          <h2 className="mb-4 text-base font-semibold lg:mb-6 lg:text-xl">Paid and pending, by course</h2>
+
+          <div className="space-y-3">
+            {feeDetails.courses.map((course) => (
+              <div
+                key={course.slug || course.name}
+                className="rounded-xl border border-border p-4 lg:p-5"
+              >
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <p className="text-sm font-medium lg:text-base">{course.name}</p>
+                  <p className="text-xs text-muted-foreground lg:text-sm">
+                    Fee ₹{course.totalFee.toLocaleString("en-IN")}
+                  </p>
+                </div>
+
+                <div className="mt-3 grid grid-cols-2 gap-3">
+                  <div className="rounded-lg bg-emerald-500/10 px-3 py-2.5">
+                    <p className="text-xs text-muted-foreground">Paid</p>
+                    <p className="text-lg font-bold text-emerald-600 lg:text-xl">
+                      ₹{course.paid.toLocaleString("en-IN")}
+                    </p>
+                  </div>
+                  <div className="rounded-lg bg-amber-500/10 px-3 py-2.5">
+                    <p className="text-xs text-muted-foreground">Pending</p>
+                    <p className="text-lg font-bold text-amber-600 lg:text-xl">
+                      ₹{course.pending.toLocaleString("en-IN")}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Its own Pay button, so a student with several courses never has
+                    to work out which figure belongs to which before paying. */}
+                {course.payable > 0 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="mt-3 w-full gap-1.5"
+                    onClick={() => openPayDialog(course.feeId)}
+                  >
+                    <CreditCard className="size-4" />
+                    Pay ₹{course.payable.toLocaleString("en-IN")}
+                  </Button>
+                )}
+              </div>
+            ))}
+
+            {feeDetails.courses.length === 0 && (
+              <p className="rounded-xl border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
+                You are not enrolled in a course yet.
+              </p>
+            )}
           </div>
-          <Progress value={paidPct} className="h-2.5 lg:h-3 mb-2" />
-          <div className="flex justify-between text-sm lg:text-base">
-            <span className="text-muted-foreground">{paidPct}% paid</span>
-            <span className="text-amber-600 font-medium">₹{feeDetails.pending.toLocaleString()} remaining</span>
-          </div>
+
+          {feeDetails.courses.length > 1 && (
+            <div className="mt-4 space-y-2 border-t border-border pt-4">
+              <div className="flex items-baseline justify-between text-sm lg:text-base">
+                <span className="text-muted-foreground">Paid across all courses</span>
+                <span className="font-semibold text-emerald-600">
+                  ₹{feeDetails.paid.toLocaleString("en-IN")}
+                </span>
+              </div>
+              <div className="flex items-baseline justify-between text-sm lg:text-base">
+                <span className="text-muted-foreground">Pending across all courses</span>
+                <span className="font-semibold text-amber-600">
+                  ₹{feeDetails.pending.toLocaleString("en-IN")}
+                </span>
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 
       {/* Installments */}
       <Card>
         <CardContent className="p-5 sm:p-6 lg:p-8">
-          <h2 className="text-base sm:text-lg lg:text-xl font-semibold mb-4 lg:mb-6">Installment Schedule</h2>
+          <h2 className="mb-4 text-base font-semibold lg:mb-6 lg:text-xl">Installment Schedule</h2>
           <div className="space-y-3">
             {feeDetails.installments.map((inst) => (
               <div
@@ -920,45 +1056,47 @@ export default function StudentFee() {
                   inst.awaitingVerification ? "border-amber-500/40 bg-amber-500/5" : "border-border"
                 }`}
               >
-                <div className="flex items-center gap-3 sm:gap-4 min-w-0 flex-1">
+                <div className="flex min-w-0 flex-1 items-center gap-3 sm:gap-4">
                   {inst.status === "Paid" ? (
-                    <CheckCircle2 className="size-5 lg:size-6 text-emerald-600 shrink-0" />
+                    <CheckCircle2 className="size-5 shrink-0 text-emerald-600 lg:size-6" />
                   ) : inst.status === "Partial" ? (
-                    <CheckCircle2 className="size-5 lg:size-6 text-sky-600 shrink-0" />
+                    <CheckCircle2 className="size-5 shrink-0 text-sky-600 lg:size-6" />
                   ) : inst.awaitingVerification ? (
-                    <ShieldQuestion className="size-5 lg:size-6 text-amber-600 shrink-0" />
+                    <ShieldQuestion className="size-5 shrink-0 text-amber-600 lg:size-6" />
                   ) : (
-                    <Clock className="size-5 lg:size-6 text-amber-600 shrink-0" />
+                    <Clock className="size-5 shrink-0 text-amber-600 lg:size-6" />
                   )}
                   <div className="min-w-0">
-                    <p className="text-sm lg:text-base font-medium truncate">{inst.label}</p>
-                    <p className="text-xs lg:text-sm text-muted-foreground truncate">
+                    <p className="truncate text-sm font-medium lg:text-base">
+                      {inst.courseName} · {inst.label}
+                    </p>
+                    <p className="truncate text-xs text-muted-foreground lg:text-sm">
                       Due: {inst.dueDate}{inst.paidDate ? ` · Last payment: ${inst.paidDate}` : ""}
                     </p>
                     {inst.paidAmount > 0 && inst.balance > 0 && (
-                      <p className="text-[11px] lg:text-xs text-muted-foreground mt-0.5">
+                      <p className="mt-0.5 text-[11px] text-muted-foreground lg:text-xs">
                         ₹{inst.paidAmount.toLocaleString("en-IN")} paid · ₹{inst.balance.toLocaleString("en-IN")} remaining
                       </p>
                     )}
                     {inst.awaitingVerification && (
-                      <p className="text-[11px] lg:text-xs text-amber-700 dark:text-amber-400 font-medium mt-0.5">
+                      <p className="mt-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-400 lg:text-xs">
                         Payment received — awaiting verification
                       </p>
                     )}
                     {!inst.awaitingVerification && inst.status !== "Paid" && isOverdue(inst.dueDate) && (
-                      <p className="text-[11px] lg:text-xs text-red-600 font-medium mt-0.5">Overdue</p>
+                      <p className="mt-0.5 text-[11px] font-medium text-red-600 lg:text-xs">Overdue</p>
                     )}
                   </div>
                 </div>
-                <div className="text-right shrink-0 ml-4">
-                  <p className="text-sm lg:text-base font-bold">₹{inst.balance.toLocaleString("en-IN")}</p>
+                <div className="ml-4 shrink-0 text-right">
+                  <p className="text-sm font-bold lg:text-base">₹{inst.balance.toLocaleString("en-IN")}</p>
                   {inst.balance < inst.amount && (
                     <p className="text-[10px] text-muted-foreground">of ₹{inst.amount.toLocaleString("en-IN")}</p>
                   )}
                   {inst.awaitingVerification ? (
                     <Badge
                       variant="secondary"
-                      className="text-[10px] lg:text-xs bg-amber-500/15 text-amber-600"
+                      className="bg-amber-500/15 text-[10px] text-amber-600 lg:text-xs"
                     >
                       Awaiting verification
                     </Badge>
@@ -986,30 +1124,6 @@ export default function StudentFee() {
                 No installment schedule yet. Contact the institute to set one up.
               </p>
             )}
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Extras */}
-      <Card>
-        <CardContent className="p-5 sm:p-6 lg:p-8">
-          <h2 className="text-base sm:text-lg lg:text-xl font-semibold mb-4 lg:mb-6">Additional Charges</h2>
-          <div className="space-y-3">
-            {feeDetails.extras.map((extra, i) => (
-              <div key={i} className="flex items-center justify-between rounded-xl border border-border p-3 sm:p-4 lg:p-5">
-                <div className="flex items-center gap-3">
-                  <CheckCircle2 className="size-5 text-emerald-600 shrink-0" />
-                  <p className="text-sm lg:text-base font-medium">{extra.label}</p>
-                </div>
-                <p className="text-sm lg:text-base font-bold">₹{extra.amount.toLocaleString()}</p>
-              </div>
-            ))}
-          </div>
-          <div className="mt-4 pt-4 border-t border-border">
-            <div className="flex justify-between text-sm lg:text-base">
-              <span className="text-muted-foreground">Extras Total</span>
-              <span className="font-bold">₹{extrasTotal.toLocaleString()}</span>
-            </div>
           </div>
         </CardContent>
       </Card>

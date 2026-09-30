@@ -27,6 +27,26 @@ interface Video {
   uploadedBy: string
   date: string
   status: "Published" | "Draft" | "Processing"
+  url: string | null
+}
+
+/**
+ * Only `http(s)` and blob-free `data:` links are allowed through.
+ *
+ * The URL is admin-supplied free text that ends up in an `href`, and an
+ * unvalidated value here is a `javascript:` execution vector. Anything that is
+ * not plainly a web or media link is reported as "no link" rather than
+ * silently rendered as a button that does nothing.
+ */
+function safeVideoUrl(raw: string | null): string | null {
+  if (!raw) return null
+  try {
+    const parsed = new URL(raw, window.location.origin)
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") return parsed.href
+    return null
+  } catch {
+    return null
+  }
 }
 
 const statusConfig: Record<string, { className: string }> = {
@@ -63,6 +83,7 @@ export default function VideosPage() {
       uploadedBy: row.teachers?.full_name || "—",
       date: row.upload_date,
       status: row.status,
+      url: row.url,
     }))
 
     setVideos(mapped)
@@ -151,7 +172,9 @@ export default function VideosPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filtered.map((video) => (
+              {filtered.map((video) => {
+                const link = safeVideoUrl(video.url)
+                return (
                 <TableRow key={video.id}>
                   <TableCell>
                     <div className="flex items-center gap-3">
@@ -179,12 +202,28 @@ export default function VideosPage() {
                     </Badge>
                   </TableCell>
                   <TableCell>
-                    <Button variant="ghost" size="icon-sm">
-                      <ArrowRight className="h-4 w-4" />
-                    </Button>
+                    {link ? (
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        render={<a href={link} target="_blank" rel="noopener noreferrer" />}
+                        title={`Open ${video.title}`}
+                      >
+                        <ArrowRight className="h-4 w-4" />
+                        <span className="sr-only">Open {video.title}</span>
+                      </Button>
+                    ) : (
+                      <span
+                        className="text-[10px] text-muted-foreground px-1"
+                        title="No video URL was recorded for this row"
+                      >
+                        No link
+                      </span>
+                    )}
                   </TableCell>
                 </TableRow>
-              ))}
+                )
+              })}
             </TableBody>
           </Table>
         </CardContent>

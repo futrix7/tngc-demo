@@ -16,11 +16,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { ArrowLeft, Mail, Phone, Trash2, Loader2, User, Wallet, CreditCard, Award, IndianRupee } from "lucide-react"
+import { ArrowLeft, Mail, Phone, Trash2, Loader2, User, Wallet, CreditCard, Award, IndianRupee, KeyRound } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { supabase } from "@/lib/supabase"
 import { useToast } from "@/components/ui/sonner"
 import { AddStudentCourseDialog } from "@/components/admin/add-student-course-dialog"
+import { PasswordVisibilityToggle } from "@/components/auth/password-visibility-toggle"
 
 interface StudentData {
   name: string
@@ -72,6 +73,13 @@ export default function StudentLayout({
   const [deleteConfirm, setDeleteConfirm] = useState("")
   const [deleting, setDeleting] = useState(false)
   const [changingStatus, setChangingStatus] = useState(false)
+
+  const [passwordOpen, setPasswordOpen] = useState(false)
+  const [newPassword, setNewPassword] = useState("")
+  // The administrator is typing a password they will read aloud to the student
+  // over the counter, so they need to check they typed it right before saving.
+  const [passwordVisible, setPasswordVisible] = useState(false)
+  const [settingPassword, setSettingPassword] = useState(false)
 
   useEffect(() => {
     async function fetchStudent() {
@@ -146,24 +154,112 @@ export default function StudentLayout({
     setChangingStatus(false)
   }
 
+  async function handleSetPassword() {
+    if (settingPassword || newPassword.length < 6) return
+    setSettingPassword(true)
+
+    try {
+      const { data: sessionData } = await supabase.auth.getSession()
+      const token = sessionData.session?.access_token
+      if (!token) {
+        toast("Your admin session has expired. Please sign in again.", { variant: "destructive" })
+        return
+      }
+
+      const response = await fetch("/api/admin/students/password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ studentId: id, password: newPassword }),
+      })
+      const result = (await response.json().catch(() => ({}))) as { error?: string }
+
+      if (!response.ok) {
+        toast(result.error ?? "Could not update the password", { variant: "destructive" })
+        return
+      }
+
+      toast(`Login password set for ${student?.name ?? "this student"}`, { variant: "success" })
+      setNewPassword("")
+      setPasswordOpen(false)
+    } catch {
+      toast("Could not update the password. Please try again.", { variant: "destructive" })
+    } finally {
+      setSettingPassword(false)
+    }
+  }
+
+  /**
+   * Deletes a student and everything attached to them.
+   *
+   * This ran entirely in the browser with the anon key, which is why deleting a
+   * student never really worked. RLS scopes `payments`, `fees` and `certificates`
+   * to a student's own row, so those deletes came back as permission errors — and
+   * the handler discarded every one of them and reported "Student deleted
+   * successfully" anyway, leaving a student with no fees and no payments still on
+   * file. It also never removed the Supabase auth account, so the student kept a
+   * working login after their record was gone.
+   *
+   * The whole thing now runs server-side, where the service role is not subject to
+   * those policies, and the login is removed with the rest of it.
+   */
   async function handleDelete() {
-    if (!deleteEnabled) return
+    if (!deleteEnabled || deleting) return
     setDeleting(true)
 
-    const { data: feeRows } = await supabase.from("fees").select("id").eq("student_id", id)
-    const feeIds = feeRows?.map((f) => f.id) ?? []
+    let accountRemoved: boolean | undefined
 
-    if (feeIds.length > 0) {
-      await supabase.from("fee_installments").delete().in("fee_id", feeIds)
+    try {
+      const { data: sessionData } = await supabase.auth.getSession()
+      const token = sessionData.session?.access_token
+      if (!token) {
+        toast("Your admin session has expired. Please sign in again.", { variant: "destructive" })
+        return
+      }
+
+      const response = await fetch("/api/admin/students/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ studentId: id }),
+      })
+      const result = (await response.json().catch(() => ({}))) as {
+        error?: string
+        accountRemoved?: boolean
+      }
+
+      if (!response.ok) {
+        toast(result.error ?? "Could not delete this student. Nothing was changed.", {
+          variant: "destructive",
+          duration: 15000,
+        })
+        return
+      }
+
+      accountRemoved = result.accountRemoved
+    } catch {
+      toast("Could not delete this student. Nothing was changed — please try again.", {
+        variant: "destructive",
+        duration: 10000,
+      })
+      return
+    } finally {
+      // Always, so a failure leaves the dialog usable rather than stuck reading
+      // "Deleting..." with nothing in flight.
+      setDeleting(false)
     }
-    await supabase.from("fees").delete().eq("student_id", id)
-    await supabase.from("payments").delete().eq("student_id", id)
-    await supabase.from("certificates").delete().eq("student_id", id)
-    await supabase.from("students").delete().eq("id", id)
 
-    toast("Student deleted successfully", { variant: "success" })
-    setDeleting(false)
     setDeleteOpen(false)
+
+    if (accountRemoved === false) {
+      // The student is off the books; the login is not. A different problem, and
+      // worth saying plainly rather than reporting a clean success.
+      toast(
+        "The student was deleted, but their login could not be removed. Ask whoever administers the database to remove the account.",
+        { variant: "destructive", duration: 15000 }
+      )
+    } else {
+      toast("Student deleted successfully", { variant: "success" })
+    }
+
     // Client-side navigation rather than a full page load: the deleted route
     // must not be re-fetched from the router cache on the way out.
     router.replace("/admin/student")
@@ -237,6 +333,15 @@ export default function StudentLayout({
                   } : current)}
                 />
                 <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-2"
+                  onClick={() => { setNewPassword(""); setPasswordOpen(true) }}
+                >
+                  <KeyRound className="size-4" />
+                  Set Password
+                </Button>
+                <Button
                   variant="destructive"
                   size="lg"
                   className="gap-2 px-4"
@@ -275,6 +380,64 @@ export default function StudentLayout({
 
         {/* Page Content */}
         <div>{children}</div>
+
+        {/* Login Password Dialog */}
+        <Dialog open={passwordOpen} onOpenChange={setPasswordOpen}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2 text-lg">
+                <KeyRound className="size-5" />
+                Set Login Password
+              </DialogTitle>
+              <DialogDescription className="text-sm">
+                <span className="font-semibold text-foreground">{student.name}</span> signs in with
+                phone number <span className="font-semibold text-foreground">{student.phone}</span> and
+                this password. Changing it signs the student out of any active sessions.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-2 py-2">
+              <Label htmlFor="studentPassword" className="text-sm font-semibold">
+                New password (at least 6 characters)
+              </Label>
+              <div className="relative">
+                <Input
+                  id="studentPassword"
+                  type={passwordVisible ? "text" : "password"}
+                  autoComplete="new-password"
+                  placeholder="Enter password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  className="h-11 pr-11"
+                />
+                <PasswordVisibilityToggle
+                  visible={passwordVisible}
+                  label="password"
+                  onToggle={() => setPasswordVisible((visible) => !visible)}
+                />
+              </div>
+            </div>
+            <DialogFooter className="gap-2 sm:gap-2">
+              <Button
+                variant="outline"
+                size="lg"
+                className="px-6"
+                onClick={() => setPasswordOpen(false)}
+                disabled={settingPassword}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="lg"
+                className="gap-2 px-6"
+                onClick={handleSetPassword}
+                disabled={newPassword.length < 6 || settingPassword}
+              >
+                {settingPassword ? <Loader2 className="size-4 animate-spin" /> : <KeyRound className="size-4" />}
+                {settingPassword ? "Saving..." : "Save Password"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* Delete Dialog */}
         <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>

@@ -6,6 +6,9 @@ import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+// The schedule split only. A payment is one figure, so nothing here needs a
+// second set of parts to keep in step.
+import { AmountSplit, MAX_SPLIT_PARTS, readAmountParts, sumAmountParts } from "@/components/shared/amount-split"
 import { supabase } from "@/lib/supabase"
 import { useToast } from "@/components/ui/sonner"
 
@@ -30,7 +33,11 @@ export function AddStudentCourseDialog({
   const [selectedSlug, setSelectedSlug] = useState("")
   const [totalFee, setTotalFee] = useState("")
   const [step, setStep] = useState<"course" | "payment">("course")
-  const [initialPaymentAmount, setInitialPaymentAmount] = useState("0")
+  // One split, one figure. The schedule is how the new fee is laid out; what is
+  // handed over today is a single amount, because "paid 2,000 of 5,000" is one
+  // fact and never three. Blank schedule boxes mean one line for the whole fee.
+  const [installmentAmounts, setInstallmentAmounts] = useState<string[]>([""])
+  const [amountPaidNow, setAmountPaidNow] = useState("")
   const [paymentMethod, setPaymentMethod] = useState("upi")
   const [paymentReference, setPaymentReference] = useState("")
   const [loading, setLoading] = useState(false)
@@ -69,6 +76,24 @@ export function AddStudentCourseDialog({
       toast("Choose a course and enter a total fee greater than zero", { variant: "destructive" })
       return
     }
+
+    const schedule = readAmountParts(installmentAmounts)
+    if (schedule.error) {
+      toast(schedule.error, { variant: "destructive" })
+      return
+    }
+
+    if (schedule.amounts.length > 0) {
+      const sum = Number(sumAmountParts(installmentAmounts).toFixed(2))
+      if (Math.abs(sum - fee) > 0.005) {
+        toast(
+          `The installments must add up to ₹${fee.toLocaleString("en-IN")}. They add up to ₹${sum.toLocaleString("en-IN")}.`,
+          { variant: "destructive" }
+        )
+        return
+      }
+    }
+
     setStep("payment")
   }
 
@@ -79,11 +104,34 @@ export function AddStudentCourseDialog({
       toast("Enter a course fee greater than zero", { variant: "destructive" })
       return
     }
-    const initialAmount = Number(initialPaymentAmount)
-    const maxAmount = Number(totalFee) || 0
-    if (!Number.isFinite(initialAmount) || initialAmount < 0 || initialAmount > maxAmount) {
-      toast(`Initial payment must be between ₹0 and ₹${maxAmount.toLocaleString("en-IN")}.`, { variant: "destructive" })
+
+    const schedule = readAmountParts(installmentAmounts)
+
+    if (schedule.error) {
+      toast(schedule.error, { variant: "destructive" })
       return
+    }
+
+    // One number for what is being handed over. It can be any figure up to the
+    // fee, and the student can hand over more later — there is no second set of
+    // boxes here to keep in step with the schedule above.
+    const paidText = amountPaidNow.trim()
+    let recorded = 0
+
+    if (paidText) {
+      recorded = Number(paidText)
+
+      if (!Number.isFinite(recorded) || recorded <= 0) {
+        toast("The amount received must be a number above zero.", { variant: "destructive" })
+        return
+      }
+
+      if (recorded > fee) {
+        toast(`The payment cannot be more than the ₹${fee.toLocaleString("en-IN")} fee.`, {
+          variant: "destructive",
+        })
+        return
+      }
     }
 
     setSaving(true)
@@ -102,7 +150,8 @@ export function AddStudentCourseDialog({
           studentId,
           courseSlug: selectedCourse.slug,
           totalFee: fee,
-          initialPaymentAmount: initialAmount,
+          installmentAmounts: schedule.amounts.length > 0 ? schedule.amounts : null,
+          paymentAmount: recorded > 0 ? recorded : null,
           paymentMethod,
           paymentReference,
         }),
@@ -114,9 +163,9 @@ export function AddStudentCourseDialog({
       }
 
       toast(
-        initialAmount > 0
-          ? `${selectedCourse.name} added; ₹${initialAmount.toLocaleString("en-IN")} recorded against the course balance.`
-          : `${selectedCourse.name} added with an installment schedule of up to 3 splits.`,
+        recorded > 0
+          ? `${selectedCourse.name} added; ₹${recorded.toLocaleString("en-IN")} recorded against the course balance.`
+          : `${selectedCourse.name} added as a single line of ₹${fee.toLocaleString("en-IN")}, or split it next time.`,
         { variant: "success" }
       )
       setOpen(false)
@@ -143,7 +192,7 @@ export function AddStudentCourseDialog({
           <DialogHeader>
             <DialogTitle>{step === "course" ? "Add a course" : "Record payment"}</DialogTitle>
             <DialogDescription>
-              {step === "course" ? "Choose an active course and set this student&apos;s total fee." : "Record any amount up to the total course fee. The balance remains split across up to 3 installments."}
+              {step === "course" ? "Choose an active course and set this student&apos;s total fee." : "Set the installments yourself, then record anything being handed over today."}
             </DialogDescription>
           </DialogHeader>
           {step === "course" ? (
@@ -171,7 +220,8 @@ export function AddStudentCourseDialog({
                     onClick={() => {
                       setSelectedSlug(course.slug)
                       setTotalFee(String(course.fee_numeric || ""))
-                      setInitialPaymentAmount("0")
+                      setInstallmentAmounts([""])
+                      setAmountPaidNow("")
                     }}
                     className="flex min-h-16 w-full items-center justify-between gap-3 rounded-lg border border-transparent px-3 py-2.5 text-left transition-colors hover:bg-muted aria-pressed:border-primary/30 aria-pressed:bg-primary/5"
                   >
@@ -203,6 +253,17 @@ export function AddStudentCourseDialog({
                   disabled={!selectedCourse}
                 />
               </div>
+              {selectedCourse && (
+                <AmountSplit
+                  compact
+                  values={installmentAmounts}
+                  onChange={setInstallmentAmounts}
+                  label="Installments"
+                  target={Number(totalFee) || null}
+                  partLabels={Array.from({ length: Math.max(installmentAmounts.length, 1) }, (_, i) => `Installment ${i + 1}`)}
+                  hint={`Up to ${MAX_SPLIT_PARTS}, in your own amounts. Blank keeps the fee as one line — nothing is divided for you.`}
+                />
+              )}
               <Button onClick={continueToPayment} disabled={!selectedCourse}>
                 Continue to payment
               </Button>
@@ -212,22 +273,49 @@ export function AddStudentCourseDialog({
               <div className="rounded-lg border bg-muted/40 p-4">
                 <p className="font-medium">{selectedCourse?.name}</p>
                 <p className="mt-1 text-sm text-muted-foreground">Total course fee: ₹{Number(totalFee).toLocaleString("en-IN")}</p>
-                <p className="mt-1 text-sm text-muted-foreground">Installments: up to 3 splits, with custom amounts allowed.</p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {readAmountParts(installmentAmounts).amounts.length > 0
+                    ? `Scheduled as ${readAmountParts(installmentAmounts).amounts.length} installment${readAmountParts(installmentAmounts).amounts.length === 1 ? "" : "s"}, in your amounts.`
+                    : "Scheduled as a single line for the whole fee."}
+                </p>
               </div>
+              {/* One box, not another row of boxes. Whatever is typed here is the
+                  figure that lands on the ledger; the schedule above only says
+                  when the rest is due. */}
               <div className="space-y-2">
-                <Label htmlFor="initial-installment-payment">Amount received now</Label>
-                <Input
-                  id="initial-installment-payment"
-                  type="number"
-                  min="0"
-                  max={Number(totalFee) || undefined}
-                  step="0.01"
-                  inputMode="decimal"
-                  value={initialPaymentAmount}
-                  onChange={(event) => setInitialPaymentAmount(event.target.value)}
-                />
+                <Label htmlFor="amount-received-now">Amount received now</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="amount-received-now"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    inputMode="decimal"
+                    max={Number(totalFee) || undefined}
+                    placeholder="0"
+                    value={amountPaidNow}
+                    onChange={(event) => setAmountPaidNow(event.target.value)}
+                  />
+                  {Number(totalFee) > 0 && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="shrink-0"
+                      onClick={() => setAmountPaidNow(String(Number(totalFee)))}
+                      disabled={Number(amountPaidNow) === Number(totalFee)}
+                    >
+                      Full fee
+                    </Button>
+                  )}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Any figure up to the fee, or leave it blank if nothing is being handed over yet.
+                  {Number(totalFee) > 0 && Number(amountPaidNow) > 0 && (
+                    ` ₹${(Number(totalFee) - Number(amountPaidNow)).toLocaleString("en-IN")} will still be owing.`
+                  )}
+                </p>
               </div>
-              {Number(initialPaymentAmount) > 0 && (
+              {Number(amountPaidNow) > 0 && (
                 <>
                   <div className="space-y-2">
                     <Label htmlFor="initial-payment-method">Payment method</Label>

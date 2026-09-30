@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import {
   Card,
   CardHeader,
@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import {
   Table,
@@ -100,6 +101,21 @@ interface RecentTransaction {
   type: "income" | "expense";
 }
 
+/**
+ * Row counts offered by the Recent Transactions limit.
+ *
+ * Each step is a screenful or two of a table, and "All" is last and separate:
+ * past a few hundred rows the table stops being a list to scan and becomes a
+ * page that has to be exported instead.
+ */
+const TRANSACTION_LIMIT_OPTIONS = [
+  { value: "10", label: "10" },
+  { value: "25", label: "25" },
+  { value: "50", label: "50" },
+  { value: "100", label: "100" },
+  { value: "all", label: "All" },
+] as const;
+
 function formatCurrencyINR(value: number): string {
   return `₹${Number(value).toLocaleString("en-IN")}`;
 }
@@ -129,14 +145,33 @@ export default function AdminFinancePage() {
   const [expenseBreakdown, setExpenseBreakdown] = useState<ExpenseItem[]>([]);
   const [courseRevenue, setCourseRevenue] = useState<CourseRevenueItem[]>([]);
   const [branchData, setBranchData] = useState<BranchDatum[]>([]);
-  const [recentTransactions, setRecentTransactions] = useState<RecentTransaction[]>([]);
   const [allTransactions, setAllTransactions] = useState<RecentTransaction[]>([]);
-  const [showAllTxns, setShowAllTxns] = useState(false);
+  /**
+   * How many of the most recent transactions the table shows.
+   *
+   * This was a "View All" button flipping between a 10-row slice and the entire
+   * ledger, which is not a limit anyone can work with: a month of entries meant
+   * scrolling past hundreds of rows, and a quiet week meant the slice and the
+   * full list were the same thing. `null` is the explicit "no limit" answer and
+   * is still reachable, just on purpose.
+   */
+  const [transactionLimit, setTransactionLimit] = useState<number | null>(10);
   const [refreshKey, setRefreshKey] = useState(0);
   const [dateFilters, setDateFilters] = useState(defaultFinanceRange);
   const pendingFilterFetch = useRef<((success: boolean) => void) | null>(null);
   const filterFetchSucceeded = useRef(true);
   const [isInProfit, setIsInProfit] = useState(true);
+
+  // Derived rather than snapshotted into its own state: a stored slice goes
+  // stale the moment the limit changes or a new transaction arrives, which is
+  // what left the table disagreeing with the "View All" button.
+  const recentTransactions = useMemo(
+    () =>
+      transactionLimit === null
+        ? allTransactions
+        : allTransactions.slice(0, transactionLimit),
+    [allTransactions, transactionLimit]
+  );
 
   const handleVerify = useCallback(async () => {
     setLoading(true);
@@ -414,8 +449,9 @@ export default function AdminFinancePage() {
       const allTxns: RecentTransaction[] = [...mergedIncomeRows, ...mergedExpenseRows]
         .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
+      // Sorted newest first, so whichever limit is chosen always shows the most
+      // recent entries rather than an arbitrary slice.
       setAllTransactions(allTxns);
-      setRecentTransactions(allTxns.slice(0, 10));
 
       setDataLoading(false);
     }
@@ -778,17 +814,37 @@ export default function AdminFinancePage() {
               {/* Recent Transactions Table */}
               <Card>
                 <CardHeader>
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                       <CardTitle>Recent Transactions</CardTitle>
-                      <CardDescription>Latest financial transactions</CardDescription>
+                      <CardDescription>
+                        Showing {recentTransactions.length} of {allTransactions.length}
+                        {transactionLimit === null ? " transactions" : " transactions"}
+                      </CardDescription>
                     </div>
-                    <Button variant="outline" size="sm" onClick={() => setShowAllTxns((s) => !s)}>
-                      {showAllTxns ? "Show Less" : "View All"}
-                    </Button>
+                    <div className="flex items-center gap-2">
+                      <Label htmlFor="txn-limit" className="text-sm text-muted-foreground">
+                        Show
+                      </Label>
+                      <select
+                        id="txn-limit"
+                        value={transactionLimit === null ? "all" : String(transactionLimit)}
+                        onChange={(e) =>
+                          setTransactionLimit(e.target.value === "all" ? null : Number(e.target.value))
+                        }
+                        className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                      >
+                        {TRANSACTION_LIMIT_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
                 </CardHeader>
                 <CardContent>
+                  <div className="overflow-x-auto">
                   <Table>
                     <TableHeader>
                       <TableRow>
@@ -800,7 +856,7 @@ export default function AdminFinancePage() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {(showAllTxns ? allTransactions : recentTransactions).map((txn, index) => (
+                      {recentTransactions.map((txn, index) => (
                         <TableRow key={index}>
                           <TableCell className="font-medium">{txn.date}</TableCell>
                           <TableCell>{txn.description}</TableCell>
@@ -833,6 +889,12 @@ export default function AdminFinancePage() {
                       ))}
                     </TableBody>
                   </Table>
+                  {recentTransactions.length === 0 && (
+                    <p className="py-8 text-center text-sm text-muted-foreground">
+                      No transactions in this period.
+                    </p>
+                  )}
+                  </div>
                 </CardContent>
               </Card>
             </>
@@ -845,13 +907,16 @@ export default function AdminFinancePage() {
         onSuccess={() => {
           if (!authenticated) return;
           setRefreshKey((prev) => prev + 1);
-          setShowAllTxns(true);
         }}
       />
+      {/* Exports every transaction the date filter covers, not just the rows
+          currently on screen. The limit is there to make the table readable;
+          silently exporting a tenth of the ledger because someone left the
+          selector on 10 would be worse than no selector at all. */}
       <ExportDialog
         open={exportOpen}
         onOpenChange={setExportOpen}
-        rows={recentTransactions.map((t) => ({
+        rows={allTransactions.map((t) => ({
           Date: t.date,
           Description: t.description,
           Category: t.category,

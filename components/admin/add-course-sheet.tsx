@@ -2,7 +2,14 @@
 
 import { useState } from "react"
 import { BookOpen } from "lucide-react"
-import { FormSheet, FormField } from "@/components/admin/form-sheet"
+import {
+  FormSheet,
+  FormField,
+  SHEET_INPUT_CLASS,
+  SHEET_SELECT_TRIGGER_CLASS,
+  SHEET_SELECT_VALUE_CLASS,
+  SHEET_TEXTAREA_CLASS,
+} from "@/components/admin/form-sheet"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -95,21 +102,21 @@ export function AddCourseSheet({ open, onOpenChange, onSuccess }: AddCourseSheet
     >
       <div className="grid grid-cols-2 gap-3">
         <FormField label="Course Name" htmlFor="courseName">
-          <Input id="courseName" placeholder="Enter course name" value={courseName} onChange={(e) => setCourseName(e.target.value)} />
+          <Input id="courseName" placeholder="Enter course name" className={SHEET_INPUT_CLASS} value={courseName} onChange={(e) => setCourseName(e.target.value)} />
         </FormField>
         <FormField label="Short Name" htmlFor="shortName">
-          <Input id="shortName" placeholder="Enter the short name" value={shortName} onChange={(e) => setShortName(e.target.value)} />
+          <Input id="shortName" placeholder="Enter the short name" className={SHEET_INPUT_CLASS} value={shortName} onChange={(e) => setShortName(e.target.value)} />
         </FormField>
       </div>
 
       <div className="grid grid-cols-2 gap-3">
         <FormField label="Duration" htmlFor="duration">
-          <Input id="duration" placeholder="Enter the duration" value={duration} onChange={(e) => setDuration(e.target.value)} />
+          <Input id="duration" placeholder="Enter the duration" className={SHEET_INPUT_CLASS} value={duration} onChange={(e) => setDuration(e.target.value)} />
         </FormField>
         <FormField label="Course Type">
           <Select value={courseType} onValueChange={(v) => setCourseType(v ?? "")}>
-            <SelectTrigger>
-              <SelectValue placeholder="Select type" />
+            <SelectTrigger className={SHEET_SELECT_TRIGGER_CLASS}>
+              <SelectValue className={SHEET_SELECT_VALUE_CLASS} placeholder="Select type" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="long-term">Long-Term</SelectItem>
@@ -121,12 +128,12 @@ export function AddCourseSheet({ open, onOpenChange, onSuccess }: AddCourseSheet
 
       <div className="grid grid-cols-2 gap-3">
         <FormField label="Fee" htmlFor="fee">
-          <Input id="fee" type="number" placeholder="Enter course fee" value={fee} onChange={(e) => setFee(e.target.value)} />
+          <Input id="fee" type="number" placeholder="Enter course fee" className={SHEET_INPUT_CLASS} value={fee} onChange={(e) => setFee(e.target.value)} />
         </FormField>
         <FormField label="Eligibility">
           <Select value={eligibility} onValueChange={(v) => setEligibility(v ?? "")}>
-            <SelectTrigger>
-              <SelectValue placeholder="Select eligibility" />
+            <SelectTrigger className={SHEET_SELECT_TRIGGER_CLASS}>
+              <SelectValue className={SHEET_SELECT_VALUE_CLASS} placeholder="Select eligibility" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="10th Pass or equivalent">10th Pass</SelectItem>
@@ -142,10 +149,10 @@ export function AddCourseSheet({ open, onOpenChange, onSuccess }: AddCourseSheet
         <textarea
           id="description"
           placeholder="Enter course description"
-          rows={2}
+          rows={3}
           value={description}
           onChange={(e) => setDescription(e.target.value)}
-          className="w-full min-h-16 rounded-lg border border-input bg-transparent px-2.5 py-1 text-base transition-colors outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-sm dark:bg-input/30"
+          className={SHEET_TEXTAREA_CLASS}
         />
       </FormField>
 
@@ -153,10 +160,10 @@ export function AddCourseSheet({ open, onOpenChange, onSuccess }: AddCourseSheet
         <textarea
           id="topics"
           placeholder="Comma-separated topics"
-          rows={2}
+          rows={3}
           value={topics}
           onChange={(e) => setTopics(e.target.value)}
-          className="w-full min-h-16 rounded-lg border border-input bg-transparent px-2.5 py-1 text-base transition-colors outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-sm dark:bg-input/30"
+          className={SHEET_TEXTAREA_CLASS}
         />
       </FormField>
     </FormSheet>

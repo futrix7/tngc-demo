@@ -68,6 +68,13 @@ function sanitizeStudentSearch(value: string) {
 export default function AdminStudentsPage() {
   const [students, setStudents] = useState<Student[]>([]);
   const [loading, setLoading] = useState(true);
+  /**
+   * The full-page spinner is for the *first* load only. Every later fetch — a
+   * debounced keystroke, a filter change, a page change — keeps the rows that
+   * are already on screen and dims them instead, because blanking the whole
+   * table on every character typed made the search box feel broken.
+   */
+  const [initialLoading, setInitialLoading] = useState(true);
   const [stats, setStats] = useState<Stats[]>([
     { label: "Total Students", value: 0, color: "text-foreground" },
     { label: "Active", value: 0, color: "text-emerald-600 dark:text-emerald-400" },
@@ -111,6 +118,7 @@ export default function AdminStudentsPage() {
       console.error("Error fetching students:", error);
       if (activeRequest === requestId.current) setStudents([]);
       setLoading(false);
+      setInitialLoading(false);
       return false;
     }
 
@@ -155,6 +163,7 @@ export default function AdminStudentsPage() {
     setStudents(mapped);
     setTotalCount(count ?? 0);
     setLoading(false);
+    setInitialLoading(false);
     return true;
   }, []);
 
@@ -284,7 +293,7 @@ export default function AdminStudentsPage() {
     }
   }
 
-  if (loading) {
+  if (initialLoading) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -325,7 +334,12 @@ export default function AdminStudentsPage() {
         <CardHeader>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <CardTitle>Student Directory</CardTitle>
+              <CardTitle className="flex items-center gap-2">
+                Student Directory
+                {loading && (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" aria-label="Updating" />
+                )}
+              </CardTitle>
               <CardDescription>
                 Showing {students.length} of {totalCount.toLocaleString()} matching students
               </CardDescription>

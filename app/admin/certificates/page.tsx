@@ -41,6 +41,8 @@ import { Search, Award, CheckCircle2, Clock, Send, Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { supabase } from "@/lib/supabase"
 import { useToast } from "@/components/ui/sonner"
+import { mintId } from "@/lib/mint-id"
+import { localDate } from "@/lib/local-date"
 
 interface Certificate {
   id: string
@@ -216,9 +218,16 @@ export default function AdminCertificatesPage() {
       return
     }
 
-    const certId = `CERT-${Date.now()}`
-    const credentialId = `TNGC-${new Date().getFullYear()}-${String(Math.floor(Math.random() * 9999)).padStart(4, "0")}`
-    const issuedDate = new Date().toISOString().split("T")[0]
+    // A credential id is the number a graduate quotes to verify a certificate,
+    // so it has to be distinguishable. The old `Math.random() * 9999` gave
+    // roughly one collision per hundred certificates and nothing detected it —
+    // `certificates.credential_id` has no unique index, so two students could
+    // be handed the same official-looking reference with no error anywhere.
+    // The random tail plus the date makes that vanishingly unlikely, and the
+    // insert is retried on the vanishingly-unlikely case below.
+    const issuedDate = localDate()
+    const credentialId = `TNGC-${issuedDate.slice(0, 4)}-${mintId("").replace(/-/g, "").slice(0, 6).toUpperCase()}`
+    const certId = mintId("CERT")
 
     const { data: existingCert, error: existingError } = await supabase
       .from("certificates")

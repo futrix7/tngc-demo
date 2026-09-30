@@ -8,10 +8,15 @@ import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { ArrowLeft, Award, Download, CheckCircle2, Clock, Eye, Send, Loader2 } from "lucide-react"
+import { ArrowLeft, Award, Printer, CheckCircle2, Clock, Eye, Send, Loader2, XCircle, Hourglass } from "lucide-react"
 import { useToast } from "@/components/ui/sonner"
 import { supabase } from "@/lib/supabase"
+import { printCertificate } from "@/lib/certificate-print"
+import { mintId } from "@/lib/mint-id"
 import { QueryError } from "@/components/student/data-state"
+
+/** Every value the `certificate_status` enum can hold. */
+type CertificateStatus = "Issued" | "Processing" | "Requested" | "Pending" | "Rejected"
 
 interface Certificate {
   id: string
@@ -19,8 +24,8 @@ interface Certificate {
   course: string
   issuedDate: string
   credentialId: string
-  status: "Issued" | "Processing" | "Requested"
-  issueBy: string
+  status: CertificateStatus
+  issuedBy: string
   type: "Completion" | "Proficiency" | "Module"
 }
 
@@ -29,11 +34,21 @@ interface EligibleCourse {
   name: string
 }
 
+/**
+ * Keyed by the full `certificate_status` enum. An earlier version listed only
+ * three of the five, so a `Pending` or `Rejected` certificate made `cfg` undefined
+ * and threw while rendering the card — which blanked the whole page. Unknown
+ * values from a future enum still fall back instead of crashing.
+ */
 const statusConfig: Record<string, { className: string; icon: React.ElementType }> = {
   Issued: { className: "bg-emerald-500/15 text-emerald-600", icon: CheckCircle2 },
   Processing: { className: "bg-blue-500/15 text-blue-600", icon: Clock },
-  Requested: { className: "bg-amber-500/15 text-amber-600", icon: Clock },
+  Requested: { className: "bg-amber-500/15 text-amber-600", icon: Hourglass },
+  Pending: { className: "bg-amber-500/15 text-amber-600", icon: Hourglass },
+  Rejected: { className: "bg-red-500/15 text-red-600", icon: XCircle },
 }
+
+const FALLBACK_STATUS = { className: "bg-muted text-muted-foreground", icon: Hourglass }
 
 export default function StudentCertificates() {
   const { toast } = useToast()
@@ -164,7 +179,7 @@ export default function StudentCertificates() {
             issuedDate: c.issued_date || "—",
             credentialId: c.credential_id || "—",
             status: c.status as Certificate["status"],
-            issueBy: c.issued_by || "TNGC Computers",
+            issuedBy: c.issued_by || "TNGC Computers",
             type: c.type,
           }))
         )
@@ -188,59 +203,21 @@ export default function StudentCertificates() {
   })
 
   const issued = certificates.filter((c) => c.status === "Issued").length
+  const awaiting = certificates.filter((c) => c.status !== "Issued").length
 
-  const handleDownload = (cert: Certificate) => {
-    const studentDisplay = studentName || "Student"
-
-    const html = `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8" />
-<title>${cert.name}</title>
-<style>
-  body { font-family: Georgia, 'Times New Roman', serif; margin: 0; padding: 40px; color: #1a202c; }
-  .cert { max-width: 800px; margin: 0 auto; border: 4px double #16a34a; padding: 48px; text-align: center; }
-  .brand { font-size: 28px; font-weight: 700; color: #16a34a; letter-spacing: 2px; }
-  .sub { font-size: 12px; letter-spacing: 3px; color: #718096; text-transform: uppercase; margin-top: 4px; }
-  .line { border-top: 2px solid #16a34a; margin: 20px auto; width: 120px; }
-  .intro { font-size: 13px; color: #718096; text-transform: uppercase; letter-spacing: 2px; }
-  .name { font-size: 34px; font-weight: 700; margin: 8px 0 16px; border-bottom: 2px solid #e2e8f0; display: inline-block; padding: 0 24px 8px; }
-  .body { font-size: 15px; color: #4a5568; }
-  .course { font-size: 20px; font-weight: 700; color: #16a34a; margin: 6px 0; }
-  .meta { display: flex; justify-content: space-between; margin-top: 40px; font-size: 12px; color: #718096; text-align: center; gap: 20px; }
-  .meta div { flex: 1; }
-  .meta strong { display: block; color: #1a202c; font-size: 14px; margin-top: 6px; }
-  @media print { body { padding: 20px; } }
-</style>
-</head>
-<body>
-  <div class="cert">
-    <div class="brand">TNGC Computers</div>
-    <div class="sub">Certificate of ${cert.type}</div>
-    <hr class="line" />
-    <p class="intro">This is to certify that</p>
-    <p class="name">${studentDisplay}</p>
-    <p class="body">has successfully completed the course</p>
-    <p class="course">${cert.course}</p>
-    <p class="body">with satisfactory performance and has been awarded this certificate.</p>
-    <div class="meta">
-      <div>Credential ID<strong>${cert.credentialId}</strong></div>
-      <div>Date Issued<strong>${cert.issuedDate}</strong></div>
-      <div>Issued By<strong>${cert.issueBy}</strong></div>
-    </div>
-  </div>
-  <script>window.onload = function () { window.print(); }</script>
-</body>
-</html>`
-
-    const win = window.open("", "_blank", "width=900,height=700")
-    if (!win) {
-      toast("Please allow pop-ups to download certificates", { variant: "destructive" })
-      return
+  const handlePrint = (cert: Certificate) => {
+    const opened = printCertificate({
+      studentName,
+      course: cert.course,
+      type: cert.type,
+      name: cert.name,
+      credentialId: cert.credentialId,
+      issuedDate: cert.issuedDate,
+      issuedBy: cert.issuedBy,
+    })
+    if (!opened) {
+      toast("Please allow pop-ups to print certificates", { variant: "destructive" })
     }
-    win.document.write(html)
-    win.document.close()
-    win.focus()
   }
 
   const handleRequest = async () => {
@@ -286,9 +263,8 @@ export default function StudentCertificates() {
       return
     }
 
-    const certId = `CERT-${Date.now()}`
     const { error } = await supabase.from("certificates").insert({
-      id: certId,
+      id: mintId("CERT"),
       student_id: student.id,
       student_name: student.full_name,
       course_slug: eligibleCourse.slug,
@@ -423,7 +399,7 @@ export default function StudentCertificates() {
         </Card>
         <Card>
           <CardContent className="p-3 sm:p-4 text-center">
-            <p className="text-xl sm:text-2xl font-bold text-blue-600">{certificates.length - issued}</p>
+            <p className="text-xl sm:text-2xl font-bold text-blue-600">{awaiting}</p>
             <p className="text-[11px] sm:text-xs text-muted-foreground">Pending</p>
           </CardContent>
         </Card>
@@ -448,7 +424,7 @@ export default function StudentCertificates() {
           </Card>
         )}
         {filtered.map((cert) => {
-          const cfg = statusConfig[cert.status]
+          const cfg = statusConfig[cert.status] ?? FALLBACK_STATUS
           const Icon = cfg.icon
           return (
             <Card key={cert.id}>
@@ -465,7 +441,7 @@ export default function StudentCertificates() {
                         {cert.status}
                       </Badge>
                     </div>
-                    <p className="text-[11px] text-muted-foreground mb-1">{cert.course} &middot; {cert.issueBy}</p>
+                    <p className="text-[11px] text-muted-foreground mb-1">{cert.course} &middot; {cert.issuedBy}</p>
                     {cert.status === "Issued" && (
                       <p className="text-[10px] text-muted-foreground font-mono">ID: {cert.credentialId} &middot; {cert.issuedDate}</p>
                     )}
@@ -478,9 +454,9 @@ export default function StudentCertificates() {
                       </Button>
                     )}
                     {cert.status === "Issued" && (
-                      <Button variant="outline" size="sm" className="gap-1" onClick={() => handleDownload(cert)}>
-                        <Download className="size-3" />
-                        <span className="hidden sm:inline">Download</span>
+                      <Button variant="outline" size="sm" className="gap-1" onClick={() => handlePrint(cert)}>
+                        <Printer className="size-3" />
+                        <span className="hidden sm:inline">Print</span>
                         <span className="sm:hidden">PDF</span>
                       </Button>
                     )}
@@ -522,9 +498,9 @@ export default function StudentCertificates() {
                   </div>
                 </div>
               </div>
-              <Button className="w-full gap-1 mt-2" onClick={() => handleDownload(viewCert)}>
-                <Download className="size-3" />
-                Download Certificate
+              <Button className="w-full gap-1 mt-2" onClick={() => handlePrint(viewCert)}>
+                <Printer className="size-3" />
+                Print / Save as PDF
               </Button>
             </>
           )}

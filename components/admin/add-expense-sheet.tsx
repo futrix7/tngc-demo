@@ -1,8 +1,9 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import { WalletCards } from "lucide-react"
 import { FormSheet, FormField } from "@/components/admin/form-sheet"
+import { BranchSelect } from "@/components/admin/branch-select"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -12,6 +13,7 @@ import {
   SelectItem,
 } from "@/components/ui/select"
 import { supabase } from "@/lib/supabase"
+import { localDate } from "@/lib/local-date"
 import { useToast } from "@/components/ui/sonner"
 
 interface AddExpenseSheetProps {
@@ -20,20 +22,45 @@ interface AddExpenseSheetProps {
   onSuccess: () => void
 }
 
+/**
+ * Today, in the institute's own timezone.
+ *
+ * `toISOString()` gets this wrong by conversion: it moves to UTC first, so an
+ * expense entered at 9 AM in IST is stamped with the previous day. Every other
+ * date this app writes is a local calendar day, and the finance page buckets
+ * transactions by exactly that string. See `lib/local-date`.
+ */
+function todayLocal(): string {
+  return localDate()
+}
+
 export function AddExpenseSheet({ open, onOpenChange, onSuccess }: AddExpenseSheetProps) {
   const { toast } = useToast()
   const [description, setDescription] = useState("")
   const [category, setCategory] = useState("Salary")
   const [amount, setAmount] = useState("")
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10))
-  const [branch, setBranch] = useState("ramanthapur")
+  const [date, setDate] = useState(todayLocal)
+  const [branch, setBranch] = useState("")
   const [saving, setSaving] = useState(false)
 
-  useEffect(() => {
-    if (open) {
-      setDate(new Date().toISOString().slice(0, 10))
+  /**
+   * Reopens onto a blank form dated today.
+   *
+   * This used to be a `useEffect` on `open`, which is the one thing an effect
+   * must not do: it set state synchronously during the commit that rendered the
+   * sheet, so the form arrived carrying the last entry's date and then repainted.
+   * Doing it in the open handler is the same behaviour in one render.
+   */
+  function handleOpenChange(next: boolean) {
+    if (next) {
+      setDescription("")
+      setCategory("Salary")
+      setAmount("")
+      setDate(todayLocal())
+      setBranch("")
     }
-  }, [open])
+    onOpenChange(next)
+  }
 
   async function handleSubmit() {
     if (!description.trim()) {
@@ -66,18 +93,14 @@ export function AddExpenseSheet({ open, onOpenChange, onSuccess }: AddExpenseShe
     }
 
     toast("Expense saved successfully", { variant: "success" })
-    setDescription("")
-    setCategory("Salary")
-    setAmount("")
-    setBranch("ramanthapur")
-    onOpenChange(false)
+    handleOpenChange(false)
     onSuccess()
   }
 
   return (
     <FormSheet
       open={open}
-      onOpenChange={onOpenChange}
+      onOpenChange={handleOpenChange}
       title="Add Expense"
       icon={WalletCards}
       submitLabel={saving ? "Saving..." : "Save Expense"}
@@ -135,16 +158,7 @@ export function AddExpenseSheet({ open, onOpenChange, onSuccess }: AddExpenseShe
           </FormField>
 
           <FormField label="Branch">
-            <Select value={branch} onValueChange={(value) => setBranch(value || "ramanthapur")}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select branch" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="ramanthapur">Ramanthapur</SelectItem>
-                <SelectItem value="amberpet">Amberpet</SelectItem>
-                <SelectItem value="kodad">Kodad</SelectItem>
-              </SelectContent>
-            </Select>
+            <BranchSelect value={branch} onChange={setBranch} />
           </FormField>
         </div>
       </div>

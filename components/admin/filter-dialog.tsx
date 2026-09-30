@@ -31,9 +31,18 @@ interface FilterDialogProps {
   values: FilterValues
   onApply: (values: FilterValues) => Promise<void>
   onClear: (values: FilterValues) => Promise<void>
+  /**
+   * Word on the trigger button.
+   *
+   * Defaults to "Filters", which reads right where it sits next to a table that
+   * has no other filtering. Pages that already offer quick tabs above the
+   * results pass something like "More filters" so the two controls do not look
+   * like duplicates of each other.
+   */
+  triggerLabel?: string
 }
 
-export function FilterDialog({ title, description, fields, values, onApply, onClear }: FilterDialogProps) {
+export function FilterDialog({ title, description, fields, values, onApply, onClear, triggerLabel = "Filters" }: FilterDialogProps) {
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState<FilterValues>(values)
   const [busy, setBusy] = useState<"apply" | "clear" | null>(null)
@@ -81,7 +90,8 @@ export function FilterDialog({ title, description, fields, values, onApply, onCl
           aria-haspopup="dialog"
         >
           {busy === "apply" ? <Loader2 className="size-4 animate-spin" /> : <Filter className="size-4" />}
-          Filters{activeCount > 0 ? ` (${activeCount})` : ""}
+          {triggerLabel}
+          {activeCount > 0 ? ` (${activeCount})` : ""}
         </Button>
         {activeCount > 0 && (
           <Button

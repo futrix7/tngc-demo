@@ -15,8 +15,8 @@ import { cn } from "@/lib/utils"
 import { AuthGuard } from "@/components/auth/auth-guard"
 
 const navLinks = [
+  { label: "Certificates", href: "/student/certificates", icon: Award },
   { label: "Profile", href: "/student/profile", icon: UserCircle },
-  { label: "Certificates", href: "/student/profile/certificates", icon: Award },
   { label: "Fee", href: "/student/fee", icon: Wallet },
 ]
 
@@ -49,6 +49,17 @@ export default function StudentLayout({ children }: { children: React.ReactNode 
   const isSectionActive = (href: string) =>
     pathname === href || pathname.startsWith(`${href}/`)
 
+  // Every matching section is a candidate, and the longest match wins.
+  //
+  // With certificates living under `/student/certificates` alongside
+  // `/student/profile` this is a plain prefix test, so exactly one link can
+  // claim to be current at a time. Asking each link whether it matched on its
+  // own highlighted both whenever one section was nested inside another, and
+  // the student's eye could not tell which tab they were actually on.
+  const activeHref = navLinks
+    .filter((link) => isSectionActive(link.href))
+    .sort((a, b) => b.href.length - a.href.length)[0]?.href
+
   return (
     <AuthGuard role="student">
     <div className="h-screen overflow-hidden bg-background">
@@ -75,7 +86,7 @@ export default function StudentLayout({ children }: { children: React.ReactNode 
       >
         <div className="flex items-center gap-0.5 rounded-full border border-border bg-card/95 p-2 shadow-lg shadow-black/5 backdrop-blur-md dark:shadow-black/30">
           {navLinks.map((link) => {
-            const active = isSectionActive(link.href)
+            const active = activeHref === link.href
 
             return (
               <Link

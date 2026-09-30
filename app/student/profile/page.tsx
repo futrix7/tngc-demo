@@ -369,7 +369,7 @@ export default function StudentProfile() {
 
       {/* Quick Links */}
       <div className="space-y-2">
-        <Link href="/student/profile/certificates">
+        <Link href="/student/certificates">
           <button className="flex w-full items-center justify-between rounded-xl border border-border p-4 hover:bg-muted/50 transition-colors">
             <div className="flex items-center gap-3">
               <div className="size-9 rounded-lg bg-amber-500/10 flex items-center justify-center">

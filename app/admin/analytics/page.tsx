@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { BarChart3, TrendingUp, Users, BookOpen, Download, ArrowUpRight, Activity, Zap, Loader2 } from "lucide-react";
+import { FilterDialog, type FilterField, type FilterValues } from "@/components/admin/filter-dialog";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,6 +22,156 @@ type Branch = Database["public"]["Tables"]["branches"]["Row"];
 
 const TABS = ["This Month", "This Quarter", "This Year"] as const;
 
+/**
+ * Nothing selected.
+ *
+ * Empty string means "every one of them" for every dropdown, which is what
+ * makes the Clear button a genuine reset rather than a partial one.
+ */
+const DEFAULT_FILTERS: FilterValues = {
+  from: "",
+  to: "",
+  course: "",
+  branch: "",
+  status: "",
+  paymentMethod: "",
+  paymentStatus: "",
+  transactionType: "",
+};
+
+/**
+ * The window every figure on this page is measured over.
+ *
+ * The tabs above only ever offered three coarse spans, so there was no way to
+ * ask the one question this page usually gets asked: what happened on a given
+ * day. A single-day range has to work — `from` equal to `to` is a day, not an
+ * empty range — and an open end has to mean "still counting", not "no data".
+ */
+interface AnalyticsRange {
+  from: Date | null;
+  to: Date | null;
+}
+
+const OPEN_RANGE: AnalyticsRange = { from: null, to: null };
+
+/**
+ * Reads a Postgres `date` column as a local date.
+ *
+ * `new Date("2026-09-30")` is UTC midnight, which in any timezone behind UTC
+ * resolves to the evening of the 29th and quietly drops a day out of a
+ * from-to filter. These columns carry no timezone and neither should the
+ * comparison, so the string is unpacked by hand.
+ */
+function parseDateOnly(value: string | null | undefined): Date | null {
+  if (!value) return null;
+
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value.trim());
+  if (!match) return null;
+
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+/** Reads a `yyyy-mm-dd` box value as a local date, or null when it is blank. */
+function parseDateInput(value: string | undefined): Date | null {
+  return parseDateOnly(value?.trim());
+}
+
+/** Inclusive on both ends: a range that starts and ends today still has today. */
+function isWithinRange(value: string | null | undefined, range: AnalyticsRange) {
+  const date = parseDateOnly(value);
+  if (!date) return false;
+
+  if (range.from && date < range.from) return false;
+  if (range.to && date > range.to) return false;
+  return true;
+}
+
+/**
+ * Turns the filter box into the window the charts read.
+ *
+ * A half-entered range is completed from the tab rather than treated as a
+ * filter that matches nothing, because "from the 1st" with no end date means
+ * "from the 1st onwards" and answering that with an empty page reads as a bug.
+ */
+function resolveRange(values: FilterValues, tab: string): AnalyticsRange {
+  const from = parseDateInput(values.from);
+  const to = parseDateInput(values.to);
+
+  if (from || to) {
+    return {
+      from,
+      // An open end runs to the end of its own day, so a filter for the 1st
+      // still includes money taken on the 1st.
+      to: to
+        ? new Date(to.getFullYear(), to.getMonth(), to.getDate(), 23, 59, 59, 999)
+        : endOfDay(new Date()),
+    };
+  }
+
+  return tabRange(tab);
+}
+
+function endOfDay(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999);
+}
+
+function startOfDay(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function tabRange(tab: string): AnalyticsRange {
+  const now = new Date();
+  const to = endOfDay(now);
+
+  if (tab === "This Month") {
+    return { from: new Date(now.getFullYear(), now.getMonth(), 1), to };
+  }
+
+  if (tab === "This Quarter") {
+    return { from: new Date(now.getFullYear(), Math.floor(now.getMonth() / 3) * 3, 1), to };
+  }
+
+  return { from: new Date(now.getFullYear(), 0, 1), to };
+}
+
+function spanDays(range: AnalyticsRange): number {
+  if (!range.from || !range.to) return 0;
+  return Math.max(1, Math.round((range.to.getTime() - range.from.getTime()) / 86_400_000));
+}
+
+/** Short windows read better as days or weeks; long ones only work as months. */
+function isDayBucketed(range: AnalyticsRange) {
+  return spanDays(range) <= 45;
+}
+
+function isWeekBucketed(range: AnalyticsRange) {
+  const days = spanDays(range);
+  return days === 0 || days <= 92;
+}
+
+/**
+ * The window in words, shown in the header once a filter narrows things.
+ *
+ * "01 Mar 2026" on its own is the whole point of the dialog: an admin asking
+ * what happened on one day should not have to check two boxes to be sure that
+ * is what they are looking at.
+ */
+function describeRange(range: AnalyticsRange): string {
+  if (!range.from && !range.to) return "All dates";
+
+  const fmt = (date: Date) =>
+    date.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+
+  if (range.from && range.to && startOfDay(range.from).getTime() === startOfDay(range.to).getTime()) {
+    return fmt(range.from);
+  }
+
+  const from = range.from ? fmt(range.from) : "the beginning";
+  const to = range.to ? fmt(range.to) : "today";
+  return `${from} to ${to}`;
+}
+
 function getMonthName(monthIndex: number) {
   const names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   return names[monthIndex];
@@ -32,57 +183,75 @@ function getWeekLabel(date: Date): string {
   return `Week ${weekNum}`;
 }
 
-function computeEnrollmentTrends(students: Student[], activeTab: string) {
-  const now = new Date();
-  if (activeTab === "This Month") {
-    const grouped: Record<string, number> = {};
-    students.forEach((s) => {
-      const d = new Date(s.enrollment_date);
-      if (d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear()) {
-        const label = getWeekLabel(d);
-        grouped[label] = (grouped[label] || 0) + 1;
-      }
-    });
-    const weeks = ["Week 1", "Week 2", "Week 3", "Week 4"];
-    return weeks.map((w) => ({ month: w, value: grouped[w] || 0 }));
-  }
-  if (activeTab === "This Quarter") {
-    const quarterMonth = Math.floor(now.getMonth() / 3) * 3;
-    const grouped: Record<string, number> = {};
-    students.forEach((s) => {
-      const d = new Date(s.enrollment_date);
-      if (Math.floor(d.getMonth() / 3) * 3 === quarterMonth && d.getFullYear() === now.getFullYear()) {
-        const label = getMonthName(d.getMonth());
-        grouped[label] = (grouped[label] || 0) + 1;
-      }
-    });
-    return [0, 1, 2].map((i) => ({ month: getMonthName(quarterMonth + i), value: grouped[getMonthName(quarterMonth + i)] || 0 }));
-  }
+/**
+ * Buckets enrolments by week or by month, whichever suits the span.
+ *
+ * Only bucketing happens here. The date window and every other filter are
+ * already applied to the rows it is handed, so no chart can disagree with the
+ * card above it about how many students there are.
+ */
+function computeEnrollmentTrends(students: Student[], range: AnalyticsRange = OPEN_RANGE) {
+  const days = spanDays(range);
+  const byWeek = isWeekBucketed(range);
   const grouped: Record<string, number> = {};
+
   students.forEach((s) => {
-    const d = new Date(s.enrollment_date);
-    if (d.getFullYear() === now.getFullYear()) {
-      const label = getMonthName(d.getMonth());
-      grouped[label] = (grouped[label] || 0) + 1;
-    }
+    const date = parseDateOnly(s.enrollment_date);
+    if (!date) return;
+
+    const label = byWeek ? getWeekLabel(date) : getMonthName(date.getMonth());
+    grouped[label] = (grouped[label] || 0) + 1;
   });
+
+  if (byWeek) {
+    // Capped at six: a five-week span still needs all five, and past that the
+    // axis turns into a list nobody reads.
+    const weekCount = days === 0 ? 4 : Math.max(4, Math.ceil(days / 7));
+    const weeks: string[] = [];
+    for (let week = 1; week <= weekCount; week += 1) {
+      weeks.push(`Week ${week}`);
+    }
+    return weeks.slice(0, 6).map((w) => ({ month: w, value: grouped[w] || 0 }));
+  }
+
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   return months.map((m) => ({ month: m, value: grouped[m] || 0 }));
 }
 
-function computeTabTotals(students: Student[], activeTab: string) {
-  const now = new Date();
-  const filtered = students.filter((s) => {
-    const d = new Date(s.enrollment_date);
-    if (activeTab === "This Month") {
-      return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
-    }
-    if (activeTab === "This Quarter") {
-      return Math.floor(d.getMonth() / 3) * 3 === Math.floor(now.getMonth() / 3) * 3 && d.getFullYear() === now.getFullYear();
-    }
-    return d.getFullYear() === now.getFullYear();
-  });
-  return filtered.length;
+/**
+ * The window immediately before this one, of the same length.
+ *
+ * Growth figures have to compare two real windows. The previous version divided
+ * the student count by itself, which is always exactly `+100%` no matter what
+ * the institute did — a number that looks like a metric and means nothing.
+ */
+function previousRangeOf(range: AnalyticsRange): AnalyticsRange {
+  if (!range.from || !range.to) return OPEN_RANGE;
+
+  const from = startOfDay(range.from);
+  const to = endOfDay(range.to);
+  const days = Math.max(1, Math.round((to.getTime() - from.getTime()) / 86_400_000));
+
+  const prevTo = new Date(from.getFullYear(), from.getMonth(), from.getDate(), 23, 59, 59, 999);
+  const prevToDay = startOfDay(prevTo);
+  const prevFrom = new Date(prevToDay.getTime() - (days - 1) * 86_400_000);
+
+  return { from: prevFrom, to: prevTo };
+}
+
+/**
+ * Percentage change from `previous` to `current`, as a signed string.
+ *
+ * Returns null when there is nothing to compare — no previous window, or a
+ * previous window with nothing in it. A percentage against a zero baseline is
+ * not a number, and rendering `+100%` there is a lie the display passes on to
+ * the caller, so the caller gets null and shows no badge instead.
+ */
+function percentChange(current: number, previous: number): string | null {
+  if (previous <= 0) return null;
+  const delta = ((current - previous) / previous) * 100;
+  const rounded = Math.round(delta);
+  return `${rounded >= 0 ? "+" : ""}${rounded}%`;
 }
 
 function computeBranchData(students: Student[], branches: Branch[]) {
@@ -99,40 +268,63 @@ function computeBranchData(students: Student[], branches: Branch[]) {
     .sort((a, b) => b.students - a.students);
 }
 
-function computeRevenueTrend(transactions: Transaction[]) {
-  const now = new Date();
+/**
+ * Revenue and expenses across the chosen window.
+ *
+ * Bucketed by day for short windows and by month for long ones, so a single
+ * day gets one labelled bar rather than twelve empty ones. Returned in rupees
+ * rather than lakhs: the lakh rounding made every small figure on a one-day
+ * filter round to zero, which is exactly the data being asked about.
+ */
+function computeRevenueTrend(transactions: Transaction[], range: AnalyticsRange) {
+  if (isDayBucketed(range)) {
+    const buckets = new Map<string, { revenue: number; expenses: number }>();
+
+    for (const t of transactions) {
+      const date = parseDateOnly(t.date);
+      if (!date) continue;
+
+      const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+      const bucket = buckets.get(key) ?? { revenue: 0, expenses: 0 };
+      if (t.type === "income") bucket.revenue += t.amount;
+      else bucket.expenses += t.amount;
+      buckets.set(key, bucket);
+    }
+
+    return [...buckets.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, bucket]) => ({
+        month: new Date(`${key}T00:00:00`).toLocaleDateString("en-IN", { day: "2-digit", month: "short" }),
+        revenue: Math.round(bucket.revenue),
+        expenses: Math.round(bucket.expenses),
+      }));
+  }
+
   const grouped: Record<string, { revenue: number; expenses: number }> = {};
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   months.forEach((m) => (grouped[m] = { revenue: 0, expenses: 0 }));
 
   transactions.forEach((t) => {
-    const d = new Date(t.date);
-    if (d.getFullYear() === now.getFullYear() && d.getMonth() < now.getMonth()) {
-      const label = getMonthName(d.getMonth());
-      if (t.type === "income") grouped[label].revenue += t.amount;
-      else grouped[label].expenses += t.amount;
-    }
+    const date = parseDateOnly(t.date);
+    if (!date) return;
+
+    const label = getMonthName(date.getMonth());
+    if (t.type === "income") grouped[label].revenue += t.amount;
+    else grouped[label].expenses += t.amount;
   });
 
-  return months.slice(0, now.getMonth()).map((m) => ({
+  return months.map((m) => ({
     month: m,
-    revenue: Math.round((grouped[m].revenue / 100000) * 10) / 10,
-    expenses: Math.round((grouped[m].expenses / 100000) * 10) / 10,
+    revenue: Math.round(grouped[m].revenue),
+    expenses: Math.round(grouped[m].expenses),
   }));
 }
 
-function computeCompletionData(students: Student[], activeTab: string) {
-  const now = new Date();
-  const filtered = students.filter((s) => {
-    const d = new Date(s.enrollment_date);
-    if (activeTab === "This Month") return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
-    if (activeTab === "This Quarter") return Math.floor(d.getMonth() / 3) * 3 === Math.floor(now.getMonth() / 3) * 3 && d.getFullYear() === now.getFullYear();
-    return d.getFullYear() === now.getFullYear();
-  });
-  const total = filtered.length || 1;
-  const active = filtered.filter((s) => s.status === "Active").length;
-  const inactive = filtered.filter((s) => s.status === "Inactive").length;
-  const pending = filtered.filter((s) => s.status === "Pending").length;
+function computeCompletionData(students: Student[]) {
+  const total = students.length || 1;
+  const active = students.filter((s) => s.status === "Active").length;
+  const inactive = students.filter((s) => s.status === "Inactive").length;
+  const pending = students.filter((s) => s.status === "Pending").length;
   return [
     { name: "Completed", value: Math.round((active / total) * 100) },
     { name: "In Progress", value: Math.round((pending / total) * 100) },
@@ -141,7 +333,10 @@ function computeCompletionData(students: Student[], activeTab: string) {
 }
 
 function computePaymentStatus(payments: Payment[]) {
-  const statuses = ["Paid", "Pending", "Partial", "Rejected"];
+  // Rejected and Overdue are both real payment states; the old list named only
+  // four of the five, so those payments went uncounted by the chart about them.
+  const statuses = ["Paid", "Pending", "Partial", "Overdue", "Rejected"];
+
   return statuses.map((status) => ({
     status,
     count: payments.filter((payment) => payment.status === status).length,
@@ -169,19 +364,32 @@ function computeTopCourses(students: Student[], courses: Course[]) {
     .map((c, i) => ({ rank: i + 1, ...c }));
 }
 
+/**
+ * Age bands of the students already in scope.
+ *
+ * Anyone born after today is skipped: a data-entry slip in the future would
+ * otherwise produce a negative age and land in the youngest band, quietly
+ * inflating it with a student who does not exist.
+ */
 function computeDemographics(students: Student[]) {
   const groups: Record<string, number> = { "18 - 22": 0, "23 - 27": 0, "28 - 32": 0, "33 - 38": 0, "39+": 0 };
-  students.forEach((s) => {
-    if (s.date_of_birth) {
-      const age = Math.floor((Date.now() - new Date(s.date_of_birth).getTime()) / (365.25 * 24 * 60 * 60 * 1000));
-      if (age <= 22) groups["18 - 22"]++;
-      else if (age <= 27) groups["23 - 27"]++;
-      else if (age <= 32) groups["28 - 32"]++;
-      else if (age <= 38) groups["33 - 38"]++;
-      else groups["39+"]++;
-    }
+  const now = Date.now();
+
+  const cohort = students.filter((s) => Boolean(s.date_of_birth));
+
+  cohort.forEach((s) => {
+    const born = parseDateOnly(s.date_of_birth);
+    if (!born || born.getTime() > now) return;
+
+    const age = Math.floor((now - born.getTime()) / (365.25 * 24 * 60 * 60 * 1000));
+    if (age <= 22) groups["18 - 22"]++;
+    else if (age <= 27) groups["23 - 27"]++;
+    else if (age <= 32) groups["28 - 32"]++;
+    else if (age <= 38) groups["33 - 38"]++;
+    else groups["39+"]++;
   });
-  const total = students.filter((s) => s.date_of_birth).length || 1;
+
+  const total = cohort.length || 1;
   return Object.entries(groups).map(([ageGroup, count]) => ({
     ageGroup,
     percentage: Math.round((count / total) * 100),
@@ -215,6 +423,11 @@ export default function AnalyticsPage() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
 
+  // The tabs are shortcuts into the same range the dialog edits, so a custom
+  // window and a tab click both end up in `range` and every chart below agrees
+  // about which dates it is talking about.
+  const [filters, setFilters] = useState<FilterValues>(DEFAULT_FILTERS);
+
   useEffect(() => {
     async function fetchData() {
       setLoading(true);
@@ -235,23 +448,179 @@ export default function AnalyticsPage() {
     fetchData();
   }, []);
 
-  const enrollments = computeEnrollmentTrends(students, activeTab);
-  const totalEnrollments = computeTabTotals(students, activeTab);
-  const branchData = computeBranchData(students, branches);
-  const revenueTrend = computeRevenueTrend(transactions);
-  const completionData = computeCompletionData(students, activeTab);
-  const paymentStatus = computePaymentStatus(payments);
-  const topCourses = computeTopCourses(students, courses);
-  const demographics = computeDemographics(students);
-  const enrollmentPie = computeEnrollmentPie(students, courses);
+  const range = useMemo(() => resolveRange(filters, activeTab), [filters, activeTab]);
 
-  const totalStudents = students.length;
-  const activeStudents = students.filter((s) => s.status === "Active").length;
-  const completionRate = students.length > 0 ? Math.round((activeStudents / totalStudents) * 100) : 0;
-  const totalRevenue = transactions.filter((t) => t.type === "income").reduce((sum, t) => sum + t.amount, 0);
+  // Options come from the data rather than a hardcoded list, so a course that
+  // only exists for one branch is still selectable and a typo can never narrow
+  // the page to nothing.
+  const filterFields = useMemo<FilterField[]>(
+    () => [
+      { key: "from", label: "From date", type: "date", defaultValue: "" },
+      { key: "to", label: "To date", type: "date", defaultValue: "" },
+      {
+        key: "course",
+        label: "Course",
+        type: "select",
+        defaultValue: "",
+        options: [
+          { label: "All courses", value: "" },
+          ...courses.map((c) => ({ label: c.name, value: c.slug })),
+        ],
+      },
+      {
+        key: "branch",
+        label: "Branch",
+        type: "select",
+        defaultValue: "",
+        options: [
+          { label: "All branches", value: "" },
+          ...branches.map((b) => ({ label: b.name, value: b.id })),
+        ],
+      },
+      {
+        key: "status",
+        label: "Student status",
+        type: "select",
+        defaultValue: "",
+        options: [
+          { label: "Any status", value: "" },
+          { label: "Active", value: "Active" },
+          { label: "Pending", value: "Pending" },
+          { label: "Inactive", value: "Inactive" },
+        ],
+      },
+      {
+        key: "paymentMethod",
+        label: "Payment method",
+        type: "select",
+        defaultValue: "",
+        options: [
+          { label: "Any method", value: "" },
+          { label: "UPI", value: "upi" },
+          { label: "Cash", value: "cash" },
+          { label: "Bank transfer", value: "bank" },
+        ],
+      },
+      {
+        key: "paymentStatus",
+        label: "Payment status",
+        type: "select",
+        defaultValue: "",
+        options: [
+          { label: "Any status", value: "" },
+          { label: "Paid", value: "Paid" },
+          { label: "Pending", value: "Pending" },
+          { label: "Partial", value: "Partial" },
+          { label: "Overdue", value: "Overdue" },
+          { label: "Rejected", value: "Rejected" },
+        ],
+      },
+      {
+        key: "transactionType",
+        label: "Transaction type",
+        type: "select",
+        defaultValue: "",
+        options: [
+          { label: "Income and expense", value: "" },
+          { label: "Income only", value: "income" },
+          { label: "Expense only", value: "expense" },
+        ],
+      },
+    ],
+    [courses, branches]
+  );
+
+  // One pass over each table, so the seven charts below are all reading the same
+  // slice of the same window rather than each re-deriving its own.
+  const scopedStudents = useMemo(
+    () =>
+      students.filter(
+        (s) =>
+          isWithinRange(s.enrollment_date, range) &&
+          (!filters.course || s.course_slug === filters.course) &&
+          (!filters.branch || s.branch_id === filters.branch) &&
+          (!filters.status || s.status === filters.status)
+      ),
+    [students, range, filters.course, filters.branch, filters.status]
+  );
+
+  const scopedPayments = useMemo(
+    () =>
+      payments.filter(
+        (p) =>
+          isWithinRange(p.payment_date, range) &&
+          (!filters.course || p.course_slug === filters.course) &&
+          (!filters.branch || p.branch_id === filters.branch) &&
+          (!filters.paymentMethod || p.method === filters.paymentMethod) &&
+          // The payment-status filter is not applied here: the Payment Status
+          // chart counts all of them, and filtering the set down to one status
+          // would collapse it to a single full-height bar.
+          (!filters.paymentStatus || p.status === filters.paymentStatus)
+      ),
+    [payments, range, filters.course, filters.branch, filters.paymentMethod, filters.paymentStatus]
+  );
+
+  const scopedTransactions = useMemo(
+    () =>
+      transactions.filter(
+        (t) =>
+          isWithinRange(t.date, range) &&
+          (!filters.transactionType || t.type === filters.transactionType)
+      ),
+    [transactions, range, filters.transactionType]
+  );
+
+  /**
+   * The same filters, over the window before this one.
+   *
+   * Only the date window moves. A growth figure that also dropped the course or
+   * branch filter would be comparing this month at Kodad against all of last
+   * quarter, which is a different question than the one the card is asking.
+   */
+  const previousRange = useMemo(() => previousRangeOf(range), [range]);
+
+  const scopedPreviousStudents = useMemo(
+    () =>
+      students.filter(
+        (s) =>
+          isWithinRange(s.enrollment_date, previousRange) &&
+          (!filters.course || s.course_slug === filters.course) &&
+          (!filters.branch || s.branch_id === filters.branch) &&
+          (!filters.status || s.status === filters.status)
+      ),
+    [students, previousRange, filters.course, filters.branch, filters.status]
+  );
+
+  const scopedPreviousTransactions = useMemo(
+    () =>
+      transactions.filter(
+        (t) =>
+          isWithinRange(t.date, previousRange) &&
+          (!filters.transactionType || t.type === filters.transactionType)
+      ),
+    [transactions, previousRange, filters.transactionType]
+  );
+
+  const enrollments = computeEnrollmentTrends(scopedStudents);
+  const totalEnrollments = scopedStudents.length;
+  const branchData = computeBranchData(scopedStudents, branches);
+  const revenueTrend = computeRevenueTrend(scopedTransactions, range);
+  const completionData = computeCompletionData(scopedStudents);
+  const paymentStatus = computePaymentStatus(scopedPayments);
+  const topCourses = computeTopCourses(scopedStudents, courses);
+  const demographics = computeDemographics(scopedStudents);
+  const enrollmentPie = computeEnrollmentPie(scopedStudents, courses);
+
+  const totalStudents = scopedStudents.length;
+  const activeStudents = scopedStudents.filter((s) => s.status === "Active").length;
+  const completionRate = totalStudents > 0 ? Math.round((activeStudents / totalStudents) * 100) : 0;
+  const totalRevenue = scopedTransactions.filter((t) => t.type === "income").reduce((sum, t) => sum + t.amount, 0);
   const revenueLakhs = totalRevenue >= 100000 ? `₹${(totalRevenue / 100000).toFixed(1)}L` : `₹${totalRevenue.toLocaleString("en-IN")}`;
   const avgRating = courses.length > 0 ? (courses.reduce((s, c) => s + c.rating, 0) / courses.length).toFixed(1) : "0.0";
-  const totalPayments = payments.length;
+  const totalPayments = scopedPayments.length;
+
+  const hasCustomFilter = Object.entries(filters).some(([key, value]) => value !== DEFAULT_FILTERS[key]);
+  const rangeSummary = describeRange(range);
 
   const overallGrowth = totalStudents > 0 ? `+${Math.round((totalEnrollments / totalStudents) * 100)}%` : "+0%";
   const revenueGrowth = revenueTrend.length >= 2 ? `+${Math.round(((revenueTrend[revenueTrend.length - 1].revenue - revenueTrend[0].revenue) / (revenueTrend[0].revenue || 1)) * 100)}%` : "+0%";
@@ -281,7 +650,15 @@ export default function AnalyticsPage() {
       <div className="flex items-center justify-between">
         <div className="space-y-1">
           <h1 className="text-2xl font-bold tracking-tight">Analytics</h1>
-          <p className="text-xs text-muted-foreground">Performance insights and trends</p>
+          <p className="text-xs text-muted-foreground">
+            Performance insights and trends
+            {hasCustomFilter && (
+              <>
+                {" · "}
+                <span className="font-medium text-foreground">{rangeSummary}</span>
+              </>
+            )}
+          </p>
         </div>
         <Button variant="outline" size="sm" className="gap-2" onClick={() => setExportOpen(true)}>
           <Download className="h-3.5 w-3.5" />
@@ -289,23 +666,49 @@ export default function AnalyticsPage() {
         </Button>
       </div>
 
-      {/* Date Range Tabs */}
-      <div className="flex gap-1 rounded-lg bg-muted p-1 w-fit">
-        {TABS.map((tab) => (
-          <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
-            className={cn(
-              "rounded-md px-3 py-1.5 text-xs font-medium transition-all",
-              activeTab === tab
-                ? "bg-background text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground"
-            )}
-          >
-            {tab}
-          </button>
-        ))}
+      {/* Date range shortcuts, plus the dialog for anything the shortcuts
+          cannot express. Both write to the same range. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex gap-1 rounded-lg bg-muted p-1 w-fit">
+          {TABS.map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={cn(
+                "rounded-md px-3 py-1.5 text-xs font-medium transition-all",
+                // A custom date range overrides the tabs, so leaving one lit
+                // would claim a window the charts are no longer showing.
+                !hasCustomFilter && activeTab === tab
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              {tab}
+            </button>
+          ))}
+        </div>
+        <FilterDialog
+          title="More filters"
+          description="Narrow every chart on this page to a single day, one course, one branch, or a single payment status."
+          triggerLabel="More filters"
+          fields={filterFields}
+          values={filters}
+          onApply={async (values) => setFilters(values)}
+          onClear={async (values) => setFilters(values)}
+        />
       </div>
+
+      {/* One notice rather than seven empty charts. A filter that matches
+          nothing used to leave a wall of blank axes, which reads as a broken
+          page rather than as an honest "nothing here". */}
+      {hasCustomFilter && totalStudents === 0 && totalPayments === 0 && scopedTransactions.length === 0 && (
+        <div className="rounded-lg border border-dashed p-6 text-center">
+          <p className="text-sm font-medium">Nothing matches these filters</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            No students, payments or transactions in {rangeSummary}. Widen the dates or clear a filter.
+          </p>
+        </div>
+      )}
 
       {/* Key Metrics */}
       <div className="grid gap-2 md:grid-cols-2 lg:grid-cols-4">
@@ -341,7 +744,9 @@ export default function AnalyticsPage() {
                 <BarChart3 className="h-4 w-4" />
                 Enrollment Trends
               </CardTitle>
-              <CardDescription className="text-xs">Monthly enrollment count</CardDescription>
+              <CardDescription className="text-xs">
+                {isWeekBucketed(range) ? "Weekly enrollment count" : "Monthly enrollment count"}
+              </CardDescription>
             </div>
             <Badge variant="outline" className="gap-1 text-xs">
               <TrendingUp className="h-3 w-3" />
@@ -442,7 +847,9 @@ export default function AnalyticsPage() {
               <TrendingUp className="h-4 w-4" />
               Revenue vs Expenses
             </CardTitle>
-            <CardDescription className="text-xs">Monthly financial overview</CardDescription>
+            <CardDescription className="text-xs">
+              {isDayBucketed(range) ? "Daily financial overview" : "Monthly financial overview"}
+            </CardDescription>
           </CardHeader>
           <CardContent>
             <ResponsiveContainer width="100%" height={260}>
@@ -461,8 +868,8 @@ export default function AnalyticsPage() {
                 <XAxis dataKey="month" tick={axisStyle} />
                 <YAxis tick={axisStyle} />
                 <Tooltip contentStyle={tooltipStyle} />
-                <Area type="monotone" dataKey="revenue" stroke="#10b981" strokeWidth={2} fillOpacity={1} fill="url(#colorRev)" name="Revenue (₹L)" />
-                <Area type="monotone" dataKey="expenses" stroke={CHART_PALETTE[4]} strokeWidth={2} fillOpacity={1} fill="url(#colorExp)" name="Expenses (₹L)" />
+                <Area type="monotone" dataKey="revenue" stroke="#10b981" strokeWidth={2} fillOpacity={1} fill="url(#colorRev)" name="Revenue" />
+                <Area type="monotone" dataKey="expenses" stroke={CHART_PALETTE[4]} strokeWidth={2} fillOpacity={1} fill="url(#colorExp)" name="Expenses" />
                 <Legend />
               </AreaChart>
             </ResponsiveContainer>

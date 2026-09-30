@@ -29,14 +29,29 @@ function applyTheme(resolved: "light" | "dark") {
   root.classList.add(resolved)
 }
 
+/**
+ * Reads the stored preference.
+ *
+ * "system" has to survive a reload. It used to be read as `saved === "dark" ||
+ * saved === "light" ? saved : "light"`, which quietly rewrote anyone's choice of
+ * "system" into "light" the moment the page was refreshed — so a dark-mode user
+ * on a light-mode laptop got a white page and no way back from the toggle without
+ * picking a fixed theme.
+ */
 function getInitialTheme(): Theme {
   if (typeof window === "undefined") return "light"
-  const saved = localStorage.getItem("theme") as Theme | null
-  return saved === "dark" || saved === "light" ? saved : "light"
+  const saved = localStorage.getItem("theme")
+  return saved === "dark" || saved === "light" || saved === "system" ? saved : "light"
 }
 
+/**
+ * The theme actually painted.
+ *
+ * For "system" this asks the operating system rather than defaulting to light, so
+ * the first paint after a reload matches the preference the user actually chose.
+ */
 function getInitialResolved(theme: Theme): "light" | "dark" {
-  return theme === "system" ? "light" : theme
+  return theme === "system" ? getSystemTheme() : theme
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {

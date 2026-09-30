@@ -409,7 +409,7 @@ export interface Database {
           amount: number
           payment_date: string
           method: string
-          status: "Paid" | "Pending" | "Partial" | "Overdue"
+          status: "Paid" | "Pending" | "Partial" | "Overdue" | "Rejected"
           receipt_no: string | null
           description: string | null
           branch_id: string | null
@@ -424,7 +424,7 @@ export interface Database {
           amount: number
           payment_date: string
           method: string
-          status?: "Paid" | "Pending" | "Partial" | "Overdue"
+          status?: "Paid" | "Pending" | "Partial" | "Overdue" | "Rejected"
           receipt_no?: string | null
           description?: string | null
           branch_id?: string | null
@@ -439,7 +439,7 @@ export interface Database {
           amount?: number
           payment_date?: string
           method?: string
-          status?: "Paid" | "Pending" | "Partial" | "Overdue"
+          status?: "Paid" | "Pending" | "Partial" | "Overdue" | "Rejected"
           receipt_no?: string | null
           description?: string | null
           branch_id?: string | null
@@ -766,15 +766,15 @@ export interface Database {
           p_phone: string
           p_father_name: string
           p_father_phone: string
-          p_branch_id: string
           p_course_slugs: string[]
           p_present_status: string
           p_signature: string
           p_payment_method: string
           p_payment_description: string
-          p_paid_installment_nos?: number[]
-          p_installment_count?: number
-          p_custom_payment_amount?: number | null
+          /** At most 3 amounts of the caller's own, adding up to the course fee. */
+          p_installment_amounts?: number[] | null
+          /** One figure of the caller's own, up to the fee. Never split. */
+          p_payment_amount?: number | null
           p_total_fee_override?: number | null
         }
         Returns: {
@@ -788,7 +788,10 @@ export interface Database {
           p_user_id: string
           p_course_slug: string
           p_total_fee_override?: number | null
-          p_initial_payment_amount?: number
+          /** At most 3 amounts of the caller's own, adding up to the course fee. */
+          p_installment_amounts?: number[] | null
+          /** One figure of the caller's own, up to the fee. Never split. */
+          p_payment_amount?: number | null
           p_payment_method?: string
           p_payment_reference?: string
           p_verified_by?: string
@@ -799,6 +802,74 @@ export interface Database {
           total_fee: number
         }[]
       }
+      /**
+       * A student's claim for one amount against one course fee. The figure is
+       * entirely their own and moves no balance until an admin verifies it, so a
+       * student asserting they paid is never the same as the institute agreeing.
+       */
+      submit_fee_payment: {
+        Args: {
+          p_user_id: string
+          p_fee_id: string
+          p_amount: number
+          p_method: string
+          p_reference: string
+        }
+        Returns: {
+          payment_id: string
+          amount: number
+          installment_label: string
+        }[]
+      }
+      /**
+       * Records one figure against a course fee and settles the linked
+       * installments and fee balance in the same transaction, oldest schedule
+       * line first. The admin-side counterpart to submit_fee_payment(), and the
+       * only path that handles a part payment: the caller's number is what lands
+       * on the ledger, and the lines it crosses are bookkeeping rather than a
+       * division. Reached through /api/installments/collect.
+       */
+      record_fee_payment: {
+        Args: {
+          p_fee_id: string
+          p_amount: number
+          p_method: string
+          p_description: string
+          p_status: "Paid" | "Pending"
+          p_receipt_no: string | null
+          p_verified_by?: string | null
+        }
+        Returns: {
+          payment_id: string
+          installment_id: string
+          installment_label: string
+          amount: number
+        }[]
+      }
+      /**
+       * record_fee_payment() with a date the administrator chose, for a receipt
+       * handed over on a day other than today. Same settlement rules; the date
+       * cannot be in the future or predate the fee it pays. Reached through
+       * /api/installments/collect.
+       */
+      record_fee_payment_at: {
+        Args: {
+          p_fee_id: string
+          p_amount: number
+          p_method: string
+          p_description: string
+          p_status: "Paid" | "Pending"
+          p_receipt_no: string | null
+          p_verified_by: string | null
+          p_payment_date: string | null
+        }
+        Returns: {
+          payment_id: string
+          installment_id: string
+          installment_label: string
+          amount: number
+        }[]
+      }
     }
     Enums: {
       course_type: "long-term" | "short-term"
@@ -806,7 +877,7 @@ export interface Database {
       student_status: "Active" | "Inactive" | "Pending"
       gender_type: "male" | "female" | "other"
       teacher_status: "Active" | "On Leave"
-      payment_status: "Paid" | "Pending" | "Partial" | "Overdue"
+      payment_status: "Paid" | "Pending" | "Partial" | "Overdue" | "Rejected"
       attendance_status: "Present" | "Absent" | "Late" | "Leave"
       certificate_status: "Issued" | "Pending" | "Rejected" | "Processing" | "Requested"
       certificate_type: "Completion" | "Proficiency" | "Module"

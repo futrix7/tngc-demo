@@ -34,6 +34,7 @@ import {
   CheckCircle2,
   Clock,
   AlertTriangle,
+  Banknote,
   Loader2,
   RotateCcw,
 } from "lucide-react"
@@ -41,6 +42,7 @@ import { cn } from "@/lib/utils"
 import { supabase } from "@/lib/supabase"
 import { useToast } from "@/components/ui/sonner"
 import { FilterDialog, type FilterField, type FilterValues } from "@/components/admin/filter-dialog"
+import { CollectDialog, type CollectibleInstallment } from "@/components/admin/collect-dialog"
 
 interface Installment {
   id: string
@@ -106,9 +108,7 @@ export default function InstallmentsPage() {
   ])
   const perPage = 10
 
-  const [payOpen, setPayOpen] = useState(false)
-  const [payingId, setPayingId] = useState<string | null>(null)
-  const [paying, setPaying] = useState(false)
+  const [collecting, setCollecting] = useState<CollectibleInstallment | null>(null)
   const [verifyingId, setVerifyingId] = useState<string | null>(null)
   const [unmarkingId, setUnmarkingId] = useState<string | null>(null)
   const [confirmUnmark, setConfirmUnmark] = useState<Installment | null>(null)
@@ -370,68 +370,6 @@ export default function InstallmentsPage() {
       })
     } finally {
       setVerifyingId(null)
-    }
-  }
-
-  async function handleMarkPaid() {
-    if (!payingId) return
-    setPaying(true)
-
-    const inst = installments.find((i) => i.id === payingId)
-    if (!inst) {
-      toast("Installment not found", { variant: "destructive" })
-      setPaying(false)
-      return
-    }
-
-    try {
-      // The endpoint verifies the admin session server-side; without the token it
-      // cannot tell an administrator from an anonymous visitor.
-      const { data: sessionData } = await supabase.auth.getSession()
-      const token = sessionData.session?.access_token
-
-      if (!token) {
-        toast("Your session has expired. Please sign in again.", { variant: "destructive" })
-        setPaying(false)
-        return
-      }
-
-      const res = await fetch("/api/installments/mark-paid", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ installmentId: payingId, method: "cash" }),
-      })
-
-      const json = (await res.json()) as { error?: string; amount?: number }
-
-      if (!res.ok) {
-        // "Nothing was changed" is now literally true: the payment, the
-        // installment and the fee balance are written in one transaction, so
-        // there is no half-finished state left behind to go and reconcile.
-        toast(json.error ?? "We couldn't record that payment. Nothing was changed.", {
-          variant: "destructive",
-          duration: 10000,
-        })
-        setPaying(false)
-        return
-      }
-
-      setPaying(false)
-      toast(`${inst.label} fully paid with ₹${Number(json.amount ?? inst.balance).toLocaleString("en-IN")}`, {
-        variant: "success",
-      })
-      setPayOpen(false)
-      setPayingId(null)
-      fetchInstallments()
-    } catch {
-      setPaying(false)
-      toast("We couldn't record that payment. Nothing was changed — please try again.", {
-        variant: "destructive",
-        duration: 10000,
-      })
     }
   }
 
@@ -807,10 +745,18 @@ export default function InstallmentsPage() {
                           <Button
                             variant="ghost"
                             size="icon-sm"
-                            onClick={() => { setPayingId(inst.id); setPayOpen(true) }}
-                            title="Collect remaining balance"
+                            onClick={() => setCollecting({
+                              id: inst.id,
+                              student: inst.studentName,
+                              label: inst.label,
+                              title: inst.course,
+                              amount: inst.amount,
+                              balance: inst.balance,
+                              settleAll: true,
+                            })}
+                            title="Collect payment against this installment"
                           >
-                            <CheckCircle2 className="size-4 text-emerald-600" />
+                            <Banknote className="size-4 text-emerald-600" />
                           </Button>
                         )}
                         {/* The reverse. Marking an installment paid used to be
@@ -878,55 +824,11 @@ export default function InstallmentsPage() {
         </CardFooter>
       </Card>
 
-      <Dialog open={payOpen} onOpenChange={(open) => { setPayOpen(open); if (!open) setPayingId(null) }}>
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Mark as Paid</DialogTitle>
-            <DialogDescription>
-              Confirm the remaining balance was received from the student?
-            </DialogDescription>
-          </DialogHeader>
-          {(() => {
-            const installment = installments.find((item) => item.id === payingId)
-            if (!installment) return null
-            return (
-              <div className="rounded-lg bg-muted/50 p-3 text-sm">
-                <p className="font-medium">{installment.studentName} — {installment.label}</p>
-                <div className="mt-2 space-y-1">
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Installment amount</span>
-                    <span>₹{installment.amount.toLocaleString("en-IN")}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Already paid</span>
-                    <span>₹{installment.paidAmount.toLocaleString("en-IN")}</span>
-                  </div>
-                  <div className="flex justify-between border-t pt-1 font-semibold">
-                    <span>Collect now</span>
-                    <span>₹{installment.balance.toLocaleString("en-IN")}</span>
-                  </div>
-                </div>
-              </div>
-            )
-          })()}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => { setPayOpen(false); setPayingId(null) }}>Cancel</Button>
-            <Button onClick={handleMarkPaid} disabled={paying} className="bg-emerald-600 hover:bg-emerald-700">
-              {paying ? (
-                <>
-                  <Loader2 className="size-4 animate-spin" />
-                  Processing...
-                </>
-              ) : (
-                <>
-                  <CheckCircle2 className="size-4" />
-                  Confirm Payment
-                </>
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <CollectDialog
+        installment={collecting}
+        onOpenChange={(open) => { if (!open) setCollecting(null) }}
+        onCollected={() => { void fetchInstallments() }}
+      />
       <Dialog
         open={!!confirmUnmark}
         onOpenChange={(open) => {

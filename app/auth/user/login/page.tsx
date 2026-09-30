@@ -72,24 +72,20 @@ export default function UserLoginPage() {
     setLoading(true)
 
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        phone: normalizeIndianPhone(phone)!.e164,
-        password,
+      // Phone sign-in with SMS is disabled on this Supabase project, so the
+      // number and password are verified by the server, which opens the session
+      // for us. No OTP, no provider configuration, no "Phone logins are
+      // disabled" — the form still asks for exactly what the student knows.
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone, password }),
       })
+      const result = (await response.json().catch(() => ({}))) as { error?: string; name?: string }
 
-      if (error) {
-        const info = describeAuthError(error)
-        setFormError(info)
-        toast(info.message, {
-          variant: "destructive",
-          description: info.alreadyRegistered ? "Try signing in instead." : undefined,
-        })
-        return
-      }
-
-      if (!data.user) {
+      if (!response.ok) {
         const info: AuthErrorInfo = {
-          message: "We couldn't sign you in. Please try again.",
+          message: result.error || "We couldn't sign you in. Please try again.",
           recovery: "retry",
           alreadyRegistered: false,
         }
@@ -98,7 +94,11 @@ export default function UserLoginPage() {
         return
       }
 
-      toast("Welcome back!", { variant: "success" })
+      // The session now lives in cookies; read it back so this page's auth
+      // state (and the guard on the next page) agrees before we navigate.
+      await supabase.auth.getSession()
+
+      toast(result.name ? `Welcome back, ${result.name}!` : "Welcome back!", { variant: "success" })
       router.replace(resolvePostLoginPath("student", readNextPath()))
       router.refresh()
     } catch (err) {
@@ -191,7 +191,7 @@ export default function UserLoginPage() {
             <GraduationCap className="size-7 text-primary" />
           </div>
           <CardTitle className="text-2xl font-bold">Welcome Back</CardTitle>
-          <CardDescription>Sign in to your student account</CardDescription>
+          <CardDescription>Sign in with your phone number and password</CardDescription>
         </CardHeader>
 
         <CardContent>
@@ -218,6 +218,9 @@ export default function UserLoginPage() {
                 />
               </div>
               {fieldErrors.phone && <p className="text-xs text-destructive">{fieldErrors.phone}</p>}
+              <p className="text-xs text-muted-foreground">
+                The password is the one your administrator set for you.
+              </p>
             </div>
 
             <div className="space-y-2">

@@ -4,45 +4,125 @@ import { useState, useEffect } from "react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Award, Download, Loader2 } from "lucide-react"
+import { Award, Printer, Loader2, XCircle, AlertTriangle } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { supabase } from "@/lib/supabase"
+import { printCertificate } from "@/lib/certificate-print"
+import { useToast } from "@/components/ui/sonner"
 import { useStudent } from "../layout"
+
+/** Every value the `certificate_status` enum can hold. */
+type CertificateStatus = "Issued" | "Processing" | "Pending" | "Rejected" | "Requested"
 
 interface Certificate {
   id: string
   name: string
-  issuedDate: string | null
-  status: "Issued" | "Processing" | "Pending" | "Rejected" | "Requested"
+  course: string
+  issuedDate: string
+  credentialId: string
+  issuedBy: string
+  type: string
+  status: CertificateStatus
+}
+
+const statusClass: Record<CertificateStatus, string> = {
+  Issued: "bg-emerald-500/15 text-emerald-600",
+  Processing: "bg-blue-500/15 text-blue-600",
+  Pending: "bg-amber-500/15 text-amber-600",
+  Requested: "bg-amber-500/15 text-amber-600",
+  Rejected: "bg-red-500/15 text-red-600",
 }
 
 export default function StudentCertificatesPage() {
   const student = useStudent()
+  const { toast } = useToast()
   const [certificates, setCertificates] = useState<Certificate[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!student) return
     async function fetch() {
-      const { data: certRows } = await supabase
-        .from("certificates").select("id, name, issued_date, status")
-        .eq("student_id", student!.id).order("created_at", { ascending: false })
+      try {
+        setLoadError(null)
 
-      if (certRows) {
-        setCertificates(certRows.map((c) => ({
-          id: c.id,
-          name: c.name,
-          issuedDate: c.issued_date,
-          status: c.status as Certificate["status"],
-        })))
+        const { data: certRows, error } = await supabase
+          .from("certificates")
+          .select("id, name, course_slug, type, status, issued_date, credential_id, issued_by")
+          .eq("student_id", student!.id)
+          .order("created_at", { ascending: false })
+
+        // `lib/supabase` is not parameterised with `Database`, so a bad column
+        // name resolves to a silent success with no rows. Checking `.error` is
+        // the only way to tell "no certificates" from "query was wrong".
+        if (error) {
+          console.error("[admin/student/certificates] lookup failed:", error.message)
+          setLoadError(error.message)
+          return
+        }
+
+        const rows = certRows ?? []
+        const slugs = [...new Set(rows.map((row) => row.course_slug).filter(Boolean))] as string[]
+        const { data: courseRows, error: courseError } = slugs.length
+          ? await supabase.from("courses").select("slug, name").in("slug", slugs)
+          : { data: [], error: null }
+
+        if (courseError) {
+          console.error("[admin/student/certificates] course lookup failed:", courseError.message)
+        }
+        const courseNames = new Map((courseRows ?? []).map((row) => [row.slug, row.name]))
+
+        setCertificates(
+          rows.map((row) => ({
+            id: row.id,
+            name: row.name,
+            course: (row.course_slug && courseNames.get(row.course_slug)) || row.course_slug || "Course",
+            issuedDate: row.issued_date || "—",
+            credentialId: row.credential_id || "—",
+            issuedBy: row.issued_by || "TNGC Computers",
+            type: row.type || "Completion",
+            status: row.status as CertificateStatus,
+          }))
+        )
+      } catch (err) {
+        console.error("[admin/student/certificates] fetch crashed:", err)
+        setLoadError(err instanceof Error ? err.message : "Unexpected error")
+      } finally {
+        setLoading(false)
       }
-      setLoading(false)
     }
-    fetch()
+    void fetch()
   }, [student])
 
   if (loading) {
     return <div className="flex items-center justify-center py-12"><Loader2 className="size-6 animate-spin text-muted-foreground" /></div>
+  }
+
+  if (loadError) {
+    return (
+      <div className="flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+        <AlertTriangle className="size-4 shrink-0 mt-0.5" />
+        <p>Could not load certificates: {loadError}</p>
+      </div>
+    )
+  }
+
+  const issued = certificates.filter((c) => c.status === "Issued").length
+  const processing = certificates.filter((c) => c.status === "Processing" || c.status === "Requested").length
+
+  const handlePrint = (cert: Certificate) => {
+    const opened = printCertificate({
+      studentName: student?.name ?? "",
+      course: cert.course,
+      type: cert.type,
+      name: cert.name,
+      credentialId: cert.credentialId,
+      issuedDate: cert.issuedDate,
+      issuedBy: cert.issuedBy,
+    })
+    if (!opened) {
+      toast("Please allow pop-ups to print certificates", { variant: "destructive" })
+    }
   }
 
   return (
@@ -56,14 +136,14 @@ export default function StudentCertificatesPage() {
         </Card>
         <Card>
           <CardContent className="p-3 sm:p-4 text-center">
-            <p className="text-xl sm:text-2xl font-bold text-emerald-600">{certificates.filter((c) => c.status === "Issued").length}</p>
+            <p className="text-xl sm:text-2xl font-bold text-emerald-600">{issued}</p>
             <p className="text-[11px] sm:text-xs text-muted-foreground">Issued</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-3 sm:p-4 text-center">
-            <p className="text-xl sm:text-2xl font-bold text-blue-600">{certificates.filter((c) => c.status === "Processing").length}</p>
-            <p className="text-[11px] sm:text-xs text-muted-foreground">Processing</p>
+            <p className="text-xl sm:text-2xl font-bold text-blue-600">{processing}</p>
+            <p className="text-[11px] sm:text-xs text-muted-foreground">In Progress</p>
           </CardContent>
         </Card>
       </div>
@@ -79,18 +159,31 @@ export default function StudentCertificatesPage() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
                     <p className="text-xs sm:text-sm font-medium truncate">{cert.name}</p>
-                    <Badge variant="secondary" className={cn("text-[10px] shrink-0", cert.status === "Issued" ? "bg-emerald-500/15 text-emerald-600" : "bg-blue-500/15 text-blue-600")}>
+                    <Badge
+                      variant="secondary"
+                      className={cn(
+                        "text-[10px] shrink-0",
+                        statusClass[cert.status] ?? "bg-muted text-muted-foreground"
+                      )}
+                    >
                       {cert.status}
                     </Badge>
                   </div>
-                  {cert.status === "Issued" && cert.issuedDate && (
-                    <p className="text-[10px] text-muted-foreground font-mono">Issued: {cert.issuedDate}</p>
+                  <p className="text-[11px] text-muted-foreground mb-1">{cert.course} &middot; {cert.issuedBy}</p>
+                  {cert.status === "Issued" && (
+                    <p className="text-[10px] text-muted-foreground font-mono">ID: {cert.credentialId} &middot; Issued: {cert.issuedDate}</p>
+                  )}
+                  {cert.status === "Rejected" && (
+                    <p className="text-[10px] text-red-600 flex items-center gap-1">
+                      <XCircle className="size-3" />
+                      Not approved — the student can request it again.
+                    </p>
                   )}
                 </div>
                 {cert.status === "Issued" && (
-                  <Button variant="outline" size="sm" className="gap-1 shrink-0">
-                    <Download className="size-3" />
-                    <span className="hidden sm:inline">Download</span>
+                  <Button variant="outline" size="sm" className="gap-1 shrink-0" onClick={() => handlePrint(cert)}>
+                    <Printer className="size-3" />
+                    <span className="hidden sm:inline">Print</span>
                     <span className="sm:hidden">PDF</span>
                   </Button>
                 )}

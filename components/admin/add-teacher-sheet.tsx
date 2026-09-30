@@ -2,7 +2,13 @@
 
 import { useState } from "react"
 import { GraduationCap } from "lucide-react"
-import { FormSheet, FormField } from "@/components/admin/form-sheet"
+import {
+  FormSheet,
+  FormField,
+  SHEET_INPUT_CLASS,
+  SHEET_SELECT_TRIGGER_CLASS,
+  SHEET_SELECT_VALUE_CLASS,
+} from "@/components/admin/form-sheet"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -12,6 +18,7 @@ import {
   SelectItem,
 } from "@/components/ui/select"
 import { supabase } from "@/lib/supabase"
+import { mintId } from "@/lib/mint-id"
 import { useToast } from "@/components/ui/sonner"
 
 interface AddTeacherSheetProps {
@@ -39,16 +46,26 @@ export function AddTeacherSheet({ open, onOpenChange, onSuccess }: AddTeacherShe
 
     setSaving(true)
 
-    const teacherId = `TCH-${Date.now()}`
+    // `teachers.experience` is an INTEGER of years. The picker used to offer
+    // ranges ("1-3", "5-10") and `parseInt` truncated each to its lower bound,
+    // so "1-3 years" was stored as 1 and the list printed "1 yrs exp" for a
+    // teacher the admin had described as having three. `parseFloat` on a number
+    // field is exact and matches the column, the edit sheet, and that label.
+    const years = experience ? Number.parseFloat(experience) : 0
+    if (!Number.isFinite(years) || years < 0) {
+      setSaving(false)
+      toast("Experience must be a number of years", { variant: "destructive" })
+      return
+    }
 
     const { error } = await supabase.from("teachers").insert({
-      id: teacherId,
+      id: mintId("TCH"),
       full_name: fullName.trim(),
       email: email.trim(),
       phone: phone.trim(),
       role: "Teacher",
       subjects: [],
-      experience: experience ? parseInt(experience) : 0,
+      experience: years,
       qualification: qualification || null,
       specialization: specialization || null,
       salary: salary ? parseFloat(salary) : null,
@@ -86,21 +103,21 @@ export function AddTeacherSheet({ open, onOpenChange, onSuccess }: AddTeacherShe
     >
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <FormField label="Full Name" htmlFor="fullName">
-          <Input id="fullName" placeholder="Enter full name" value={fullName} onChange={(e) => setFullName(e.target.value)} />
+          <Input id="fullName" placeholder="Enter full name" className={SHEET_INPUT_CLASS} value={fullName} onChange={(e) => setFullName(e.target.value)} />
         </FormField>
         <FormField label="Email" htmlFor="email">
-          <Input id="email" type="email" placeholder="Enter email" value={email} onChange={(e) => setEmail(e.target.value)} />
+          <Input id="email" type="email" placeholder="Enter email" className={SHEET_INPUT_CLASS} value={email} onChange={(e) => setEmail(e.target.value)} />
         </FormField>
       </div>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <FormField label="Phone" htmlFor="phone">
-          <Input id="phone" type="tel" placeholder="Enter phone" value={phone} onChange={(e) => setPhone(e.target.value)} />
+          <Input id="phone" type="tel" placeholder="Enter phone" className={SHEET_INPUT_CLASS} value={phone} onChange={(e) => setPhone(e.target.value)} />
         </FormField>
         <FormField label="Qualification">
           <Select value={qualification} onValueChange={(v) => setQualification(v ?? "")}>
-            <SelectTrigger>
-              <SelectValue placeholder="Select qualification" />
+            <SelectTrigger className={SHEET_SELECT_TRIGGER_CLASS}>
+              <SelectValue className={SHEET_SELECT_VALUE_CLASS} placeholder="Select qualification" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="B.Tech">B.Tech</SelectItem>
@@ -117,8 +134,8 @@ export function AddTeacherSheet({ open, onOpenChange, onSuccess }: AddTeacherShe
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <FormField label="Specialization">
           <Select value={specialization} onValueChange={(v) => setSpecialization(v ?? "")}>
-            <SelectTrigger>
-              <SelectValue placeholder="Select specialization" />
+            <SelectTrigger className={SHEET_SELECT_TRIGGER_CLASS}>
+              <SelectValue className={SHEET_SELECT_VALUE_CLASS} placeholder="Select specialization" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="Java">Java</SelectItem>
@@ -133,22 +150,20 @@ export function AddTeacherSheet({ open, onOpenChange, onSuccess }: AddTeacherShe
       </div>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <FormField label="Experience">
-          <Select value={experience} onValueChange={(v) => setExperience(v ?? "")}>
-            <SelectTrigger>
-              <SelectValue placeholder="Select experience" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="0-1">0-1 years</SelectItem>
-              <SelectItem value="1-3">1-3 years</SelectItem>
-              <SelectItem value="3-5">3-5 years</SelectItem>
-              <SelectItem value="5-10">5-10 years</SelectItem>
-              <SelectItem value="10+">10+ years</SelectItem>
-            </SelectContent>
-          </Select>
+        <FormField label="Experience (years)" htmlFor="experience">
+          <Input
+            id="experience"
+            type="number"
+            min="0"
+            step="0.5"
+            placeholder="Enter years of experience"
+            className={SHEET_INPUT_CLASS}
+            value={experience}
+            onChange={(e) => setExperience(e.target.value)}
+          />
         </FormField>
         <FormField label="Monthly Salary" htmlFor="salary">
-          <Input id="salary" type="number" placeholder="Enter salary" value={salary} onChange={(e) => setSalary(e.target.value)} />
+          <Input id="salary" type="number" placeholder="Enter salary" className={SHEET_INPUT_CLASS} value={salary} onChange={(e) => setSalary(e.target.value)} />
         </FormField>
       </div>
     </FormSheet>

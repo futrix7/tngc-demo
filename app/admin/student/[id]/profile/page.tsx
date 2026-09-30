@@ -20,36 +20,66 @@ export default function StudentProfilePage() {
   const student = useStudent()
   const [profile, setProfile] = useState<ProfileData | null>(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!student) return
-    async function fetch() {
-      const { data } = await supabase
+    async function fetchProfile() {
+      setError(null)
+
+      const { data, error: profileError } = await supabase
         .from("students")
         .select("date_of_birth, address, batch_time, father_name, father_phone, mother_name, enrollment_date")
         .eq("id", student!.id)
-        .single()
-      if (data) {
-        setProfile({
-          dob: data.date_of_birth ?? "",
-          address: data.address ?? "",
-          batchTime: data.batch_time ?? "",
-          fatherName: data.father_name ?? "",
-          fatherPhone: data.father_phone ?? "",
-          motherName: data.mother_name ?? "",
-          joinDate: data.enrollment_date,
-        })
+        .maybeSingle()
+
+      if (profileError) {
+        // Swallowed before: `data` was simply undefined, `profile` stayed null and
+        // the page rendered `null` — a blank panel under a working header, with
+        // no message and no way to tell it apart from a student who has no
+        // details on file.
+        console.error("[student profile] lookup failed:", profileError.message)
+        setError("This student's details could not be loaded.")
+        setLoading(false)
+        return
       }
+
+      if (!data) {
+        setError("This student's details could not be found.")
+        setLoading(false)
+        return
+      }
+
+      setProfile({
+        dob: data.date_of_birth ?? "",
+        address: data.address ?? "",
+        batchTime: data.batch_time ?? "",
+        fatherName: data.father_name ?? "",
+        fatherPhone: data.father_phone ?? "",
+        motherName: data.mother_name ?? "",
+        joinDate: data.enrollment_date,
+      })
       setLoading(false)
     }
-    fetch()
+    fetchProfile()
   }, [student])
 
   if (loading) {
     return <div className="flex items-center justify-center py-12"><Loader2 className="size-6 animate-spin text-muted-foreground" /></div>
   }
 
-  if (!student || !profile) return null
+  if (!student || !profile) {
+    return (
+      <Card>
+        <CardContent className="py-12 text-center">
+          <p className="text-sm font-medium">{error ?? "This student's details are unavailable."}</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            The page above still works — use the other tabs to see fees, payments and installments.
+          </p>
+        </CardContent>
+      </Card>
+    )
+  }
 
   return (
     <div className="grid lg:grid-cols-2 gap-4">

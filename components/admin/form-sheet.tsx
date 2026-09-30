@@ -23,6 +23,23 @@ interface FormSheetProps {
   contentClassName?: string
 }
 
+/**
+ * Field sizing for the data-entry sheets (student, teacher, course).
+ *
+ * Two fields share a row there, so the default 40px control looked cramped at
+ * half the sheet width. These override the component defaults — tailwind-merge
+ * drops `h-10`/`h-11` and `md:text-sm` from the primitives when they collide —
+ * giving 48px tall controls with 16px text that is readable on a phone.
+ */
+export const SHEET_INPUT_CLASS = "h-12 text-base md:text-base"
+export const SHEET_SELECT_TRIGGER_CLASS = "data-[size=default]:h-12 text-base"
+export const SHEET_SELECT_VALUE_CLASS = "text-base"
+/** Native selects keep the same footprint as the React Select trigger. */
+export const SHEET_NATIVE_SELECT_CLASS =
+  "h-12 rounded-lg border border-input bg-transparent px-3 py-2 text-base transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30"
+export const SHEET_TEXTAREA_CLASS =
+  "w-full min-h-20 rounded-lg border border-input bg-transparent px-3 py-2 text-base transition-colors outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-base dark:bg-input/30"
+
 export function FormSheet({
   open,
   onOpenChange,

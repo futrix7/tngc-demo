@@ -4,14 +4,10 @@ import { useState } from "react"
 import { Upload } from "lucide-react"
 import { FormSheet, FormField } from "@/components/admin/form-sheet"
 import { Input } from "@/components/ui/input"
-import {
-  Select,
-  SelectTrigger,
-  SelectValue,
-  SelectContent,
-  SelectItem,
-} from "@/components/ui/select"
+import { CourseSelect } from "@/components/admin/course-select"
 import { supabase } from "@/lib/supabase"
+import { mintId } from "@/lib/mint-id"
+import { localDate } from "@/lib/local-date"
 import { useToast } from "@/components/ui/sonner"
 
 interface UploadVideoSheetProps {
@@ -34,17 +30,48 @@ export function UploadVideoSheet({ open, onOpenChange, onSuccess }: UploadVideoS
       return
     }
 
+    // A video with no link is a row the list cannot act on, so it is worth
+    // saying so here rather than storing something the UI can only display.
+    const trimmedUrl = url.trim()
+    if (!trimmedUrl) {
+      toast("Please enter the URL the video is hosted at", { variant: "destructive" })
+      return
+    }
+    let parsedUrl: URL
+    try {
+      parsedUrl = new URL(trimmedUrl)
+    } catch {
+      toast("That does not look like a valid URL", { variant: "destructive" })
+      return
+    }
+    if (parsedUrl.protocol !== "https:" && parsedUrl.protocol !== "http:") {
+      toast("The video URL must start with http:// or https://", { variant: "destructive" })
+      return
+    }
+
     setSaving(true)
 
-    const videoId = `VID-${Date.now()}`
+    // `videos.uploaded_by` is a FK to `teachers.id`. It used to be left null, so
+    // every row read "—" under "Uploaded By" and no admin could be traced as
+    // the one who published a lecture. Resolved from the signed-in account.
+    const { data: authData } = await supabase.auth.getUser()
+    const { data: teacherRows } = authData?.user
+      ? await supabase.from("teachers").select("id").eq("email", authData.user.email ?? "").limit(1)
+      : { data: [] as { id: string }[] }
+    const uploadedBy = teacherRows?.[0]?.id ?? null
 
     const { error } = await supabase.from("videos").insert({
-      id: videoId,
+      id: mintId("VID"),
       title: title.trim(),
-      url: url.trim() || null,
+      url: parsedUrl.href,
       course_slug: course || null,
       duration: duration.trim() || null,
       views: 0,
+      // `upload_date` has a DEFAULT, but it is `CURRENT_DATE` evaluated in the
+      // database's timezone (UTC), which reads as yesterday for anything
+      // entered before 05:30 IST.
+      upload_date: localDate(),
+      uploaded_by: uploadedBy,
       status: "Published",
     })
 
@@ -83,22 +110,7 @@ export function UploadVideoSheet({ open, onOpenChange, onSuccess }: UploadVideoS
 
       <div className="grid grid-cols-2 gap-3">
         <FormField label="Course">
-          <Select value={course} onValueChange={(v) => setCourse(v ?? "")}>
-            <SelectTrigger>
-              <SelectValue placeholder="Select course" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="python-full-stack">Python Full Stack</SelectItem>
-              <SelectItem value="java-full-stack">Java Full Stack</SelectItem>
-              <SelectItem value="adwd">A.D.W.D</SelectItem>
-              <SelectItem value="dca">DCA</SelectItem>
-              <SelectItem value="adca">ADCA</SelectItem>
-              <SelectItem value="tally-prime">Tally PRIME</SelectItem>
-              <SelectItem value="c-language">C Language</SelectItem>
-              <SelectItem value="core-python">Core Python</SelectItem>
-              <SelectItem value="advanced-excel">Advanced Excel</SelectItem>
-            </SelectContent>
-          </Select>
+          <CourseSelect value={course} onChange={setCourse} />
         </FormField>
         <FormField label="Duration" htmlFor="duration">
           <Input id="duration" placeholder="Enter the duration" value={duration} onChange={(e) => setDuration(e.target.value)} />

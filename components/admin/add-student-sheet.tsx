@@ -2,7 +2,9 @@
 
 import { useEffect, useState } from "react"
 import { BookOpen, Check, ChevronDown, Search, UserPlus } from "lucide-react"
-import { FormSheet, FormField } from "@/components/admin/form-sheet"
+import { FormSheet, FormField, SHEET_INPUT_CLASS, SHEET_NATIVE_SELECT_CLASS } from "@/components/admin/form-sheet"
+import { AmountSplit, MAX_SPLIT_PARTS, readAmountParts, sumAmountParts } from "@/components/shared/amount-split"
+import { PasswordVisibilityToggle } from "@/components/auth/password-visibility-toggle"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
@@ -32,9 +34,16 @@ export function AddStudentSheet({ open, onOpenChange, onSuccess }: AddStudentShe
   const [courseDialogOpen, setCourseDialogOpen] = useState(false)
   const [courseSearch, setCourseSearch] = useState("")
   const [totalFee, setTotalFee] = useState("")
-  const [paidAmount, setPaidAmount] = useState("")
+  // One split and one figure. The schedule is how the fee is divided up; what is
+  // handed over on day one is a single amount, because "the student paid 2,000
+  // of 5,000" is one fact and never three. Blank schedule boxes mean the whole
+  // fee is a single line they can pay any part of later.
+  const [installmentAmounts, setInstallmentAmounts] = useState<string[]>([""])
+  const [amountPaidNow, setAmountPaidNow] = useState("")
   const [paymentMethod, setPaymentMethod] = useState("cash")
   const [paymentReference, setPaymentReference] = useState("")
+  const [password, setPassword] = useState("")
+  const [passwordVisible, setPasswordVisible] = useState(false)
   const [courses, setCourses] = useState<{ slug: string; name: string; duration: string; fee_numeric: number }[]>([])
   const [catalogLoading, setCatalogLoading] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -69,9 +78,12 @@ export function AddStudentSheet({ open, onOpenChange, onSuccess }: AddStudentShe
     setFatherPhone("")
     setCourse("")
     setTotalFee("")
-    setPaidAmount("")
+    setInstallmentAmounts([""])
+    setAmountPaidNow("")
     setPaymentMethod("cash")
     setPaymentReference("")
+    setPassword("")
+    setPasswordVisible(false)
     setCourseSearch("")
   }
 
@@ -81,10 +93,46 @@ export function AddStudentSheet({ open, onOpenChange, onSuccess }: AddStudentShe
       return
     }
 
-    const amountPaid = Number(paidAmount || 0)
-    if (amountPaid < 0 || amountPaid > Number(totalFee)) {
-      toast("Payment amount must be between 0 and the total course fee.", { variant: "destructive" })
+    const fee = Number(totalFee)
+
+    const schedule = readAmountParts(installmentAmounts)
+    if (schedule.error) {
+      toast(schedule.error, { variant: "destructive" })
       return
+    }
+
+    if (schedule.amounts.length > 0) {
+      const sum = Number(sumAmountParts(installmentAmounts).toFixed(2))
+      if (Math.abs(sum - fee) > 0.005) {
+        toast(
+          `The installments must add up to ₹${fee.toLocaleString("en-IN")}. They add up to ₹${sum.toLocaleString("en-IN")}.`,
+          { variant: "destructive" }
+        )
+        return
+      }
+    }
+
+    // A single figure for what is being handed over, and it can be any figure up
+    // to the fee. There is no second set of boxes to keep in step with the
+    // schedule: paying 2,000 of a 5,000 fee is one number, and the schedule is a
+    // plan for when the rest arrives, not a set of instructions for this form.
+    const paidText = amountPaidNow.trim()
+    let amountPaid = 0
+
+    if (paidText) {
+      amountPaid = Number(paidText)
+
+      if (!Number.isFinite(amountPaid) || amountPaid <= 0) {
+        toast("The amount paid must be a number above zero.", { variant: "destructive" })
+        return
+      }
+
+      if (amountPaid > fee) {
+        toast(`The payment cannot be more than the ₹${fee.toLocaleString("en-IN")} fee.`, {
+          variant: "destructive",
+        })
+        return
+      }
     }
 
     setSaving(true)
@@ -107,10 +155,12 @@ export function AddStudentSheet({ open, onOpenChange, onSuccess }: AddStudentShe
           fatherName,
           fatherPhone,
           courseSlug: course,
-          totalFee: Number(totalFee),
-          paidAmount: amountPaid > 0 ? amountPaid : 0,
+          totalFee: fee,
+          installmentAmounts: schedule.amounts.length > 0 ? schedule.amounts : null,
+          paymentAmount: amountPaid > 0 ? amountPaid : null,
           paymentMethod,
           paymentReference,
+          password,
         }),
       })
       const result = await response.json() as { error?: string; studentId?: string }
@@ -137,8 +187,9 @@ export function AddStudentSheet({ open, onOpenChange, onSuccess }: AddStudentShe
   )
 
   const totalCourseFee = Number(totalFee || 0)
-  const paidValue = Number(paidAmount || 0)
+  const paidValue = Number(amountPaidNow.trim()) || 0
   const remainingBalance = Math.max(totalCourseFee - paidValue, 0)
+  const paidOverFee = paidValue > totalCourseFee + 0.005 && totalCourseFee > 0
 
   return (
     <FormSheet
@@ -148,29 +199,49 @@ export function AddStudentSheet({ open, onOpenChange, onSuccess }: AddStudentShe
       icon={UserPlus}
       submitLabel={saving ? "Registering..." : "Register Student"}
       onSubmit={handleSubmit}
-      contentClassName="w-full sm:max-w-2xl"
+      contentClassName="w-full data-[side=right]:sm:max-w-xl"
     >
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <FormField label="Full Name" htmlFor="fullName">
-          <Input id="fullName" placeholder="Enter full name" value={fullName} onChange={(e) => setFullName(e.target.value)} />
+          <Input id="fullName" placeholder="Enter full name" className={SHEET_INPUT_CLASS} value={fullName} onChange={(e) => setFullName(e.target.value)} />
         </FormField>
         <FormField label="Email (optional)" htmlFor="email">
-          <Input id="email" type="email" placeholder="Enter email" value={email} onChange={(e) => setEmail(e.target.value)} />
+          <Input id="email" type="email" placeholder="Enter email" className={SHEET_INPUT_CLASS} value={email} onChange={(e) => setEmail(e.target.value)} />
         </FormField>
       </div>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <FormField label="Phone (initial password)" htmlFor="phone">
-          <Input id="phone" type="tel" inputMode="numeric" maxLength={10} placeholder="10-digit phone number" value={phone} onChange={(e) => setPhone(e.target.value)} />
+        <FormField label="Phone (student login)" htmlFor="phone">
+          <Input id="phone" type="tel" inputMode="numeric" maxLength={10} placeholder="10-digit phone number" className={SHEET_INPUT_CLASS} value={phone} onChange={(e) => setPhone(e.target.value)} />
         </FormField>
+        <FormField label="Login Password" htmlFor="password">
+          {/* The administrator hands this password to the student, so they have to
+              be able to read back what they typed before saving it. */}
+          <div className="relative">
+            <Input
+              id="password"
+              type={passwordVisible ? "text" : "password"}
+              autoComplete="new-password"
+              placeholder="Leave blank to use the phone number"
+              className={`${SHEET_INPUT_CLASS} pr-11`}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+            <PasswordVisibilityToggle
+              visible={passwordVisible}
+              label="password"
+              onToggle={() => setPasswordVisible((visible) => !visible)}
+            />
+          </div>
+        </FormField>
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <FormField label="Father / Guardian Name" htmlFor="fatherName">
-          <Input id="fatherName" placeholder="Enter name" value={fatherName} onChange={(e) => setFatherName(e.target.value)} />
+          <Input id="fatherName" placeholder="Enter name" className={SHEET_INPUT_CLASS} value={fatherName} onChange={(e) => setFatherName(e.target.value)} />
         </FormField>
-      </div>
-
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <FormField label="Father / Guardian Phone" htmlFor="fatherPhone">
-          <Input id="fatherPhone" type="tel" inputMode="numeric" maxLength={10} placeholder="10-digit phone number" value={fatherPhone} onChange={(e) => setFatherPhone(e.target.value)} />
+          <Input id="fatherPhone" type="tel" inputMode="numeric" maxLength={10} placeholder="10-digit phone number" className={SHEET_INPUT_CLASS} value={fatherPhone} onChange={(e) => setFatherPhone(e.target.value)} />
         </FormField>
       </div>
 
@@ -180,7 +251,7 @@ export function AddStudentSheet({ open, onOpenChange, onSuccess }: AddStudentShe
           variant="outline"
           aria-haspopup="dialog"
           onClick={() => setCourseDialogOpen(true)}
-          className="h-11 w-full justify-between px-3 font-normal"
+          className="h-12 w-full justify-between px-3 font-normal"
         >
           <span className="flex min-w-0 items-center gap-2 truncate text-left">
             <BookOpen className="size-4 shrink-0 text-muted-foreground" />
@@ -221,7 +292,8 @@ export function AddStudentSheet({ open, onOpenChange, onSuccess }: AddStudentShe
                   onClick={() => {
                     setCourse(item.slug)
                     setTotalFee(item.fee_numeric ? String(item.fee_numeric) : "")
-                    setPaidAmount("")
+                    setInstallmentAmounts([""])
+                    setAmountPaidNow("")
                     setPaymentMethod("cash")
                     setPaymentReference("")
                     setCourseSearch("")
@@ -254,42 +326,80 @@ export function AddStudentSheet({ open, onOpenChange, onSuccess }: AddStudentShe
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <FormField label="Amount Paid" htmlFor="paidAmount">
-          <Input
-            id="paidAmount"
-            type="number"
-            min="0"
-            max={totalCourseFee || undefined}
-            step="1"
-            inputMode="numeric"
-            placeholder="0"
-            value={paidAmount}
-            onChange={(e) => setPaidAmount(e.target.value)}
-          />
-        </FormField>
+      <AmountSplit
+        values={installmentAmounts}
+        onChange={setInstallmentAmounts}
+        label="Installments"
+        target={totalCourseFee > 0 ? totalCourseFee : null}
+        partLabels={Array.from({ length: Math.max(installmentAmounts.length, 1) }, (_, i) => `Installment ${i + 1}`)}
+        hint={`Your own amounts, up to ${MAX_SPLIT_PARTS}. Nothing is divided for you — leave every box blank and the whole fee becomes one line the student can pay any part of, whenever they like.`}
+      />
 
+      {/* One number, not another set of boxes. The schedule above is a plan for
+          the fee; this is what is physically in the hand today. */}
+      <FormField label="Amount being paid now" htmlFor="amountPaidNow">
+        <div className="flex gap-2">
+          <Input
+            id="amountPaidNow"
+            type="number"
+            inputMode="decimal"
+            min="0"
+            step="0.01"
+            max={totalCourseFee || undefined}
+            placeholder="0"
+            aria-invalid={paidOverFee}
+            className={paidOverFee ? `${SHEET_INPUT_CLASS} border-destructive` : SHEET_INPUT_CLASS}
+            value={amountPaidNow}
+            onChange={(e) => setAmountPaidNow(e.target.value)}
+          />
+          {totalCourseFee > 0 && (
+            <Button
+              type="button"
+              variant="outline"
+              className="shrink-0"
+              onClick={() => setAmountPaidNow(String(totalCourseFee))}
+              disabled={totalCourseFee === paidValue}
+            >
+              Full fee
+            </Button>
+          )}
+        </div>
+      </FormField>
+
+      <p className="-mt-2 text-xs text-muted-foreground">
+        Any figure up to the fee, or leave it blank if nothing is being handed over yet.
+        {remainingBalance > 0 && ` ₹${remainingBalance.toLocaleString("en-IN")} will still be owing.`}
+      </p>
+
+      {paidOverFee && (
+        <p className="text-xs font-medium text-destructive">
+          That is more than the ₹{totalCourseFee.toLocaleString("en-IN")} fee.
+        </p>
+      )}
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <FormField label="Payment Method">
           <select
             value={paymentMethod}
             onChange={(e) => setPaymentMethod(e.target.value)}
-            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            className={SHEET_NATIVE_SELECT_CLASS}
           >
             <option value="cash">Cash</option>
             <option value="upi">UPI</option>
             <option value="bank">Bank</option>
           </select>
         </FormField>
-      </div>
 
-      <FormField label="Reference / Note" htmlFor="paymentReference">
-        <Input
-          id="paymentReference"
-          placeholder="Optional receipt or note"
-          value={paymentReference}
-          onChange={(e) => setPaymentReference(e.target.value)}
-        />
-      </FormField>
+        <FormField label="Reference / Note" htmlFor="paymentReference">
+          <Input
+            id="paymentReference"
+            placeholder="Optional receipt or note"
+            className={SHEET_INPUT_CLASS}
+            value={paymentReference}
+            onChange={(e) => setPaymentReference(e.target.value)}
+          />
+        </FormField>
+      </div>
 
       <div className="flex gap-2 pt-2">
         <Button type="button" variant="outline" className="flex-1" onClick={clearForm}>

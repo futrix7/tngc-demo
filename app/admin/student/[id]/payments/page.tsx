@@ -7,6 +7,7 @@ import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@
 import { Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { supabase } from "@/lib/supabase"
+import { isAwaitingVerification, isRejected, paymentStatusLabel } from "@/lib/payment-status"
 import { useStudent } from "../layout"
 
 interface Payment {
@@ -14,8 +15,27 @@ interface Payment {
   date: string
   amount: number
   mode: string
-  status: "Paid" | "Pending"
+  status: string
   for: string
+  /** The schedule line this money landed on, when it landed on one. */
+  installment: string
+}
+
+/**
+ * One presentation for every stored status.
+ *
+ * `p.status === "Paid" ? "Paid" : "Pending"` was wrong in a way that mattered: a
+ * claim the institute had already refused is a terminal decision, and showing it
+ * as "Pending" told the counter it was still waiting to be reviewed — so a student
+ * whose claim was rejected looked like a student who had simply not been looked
+ * at yet. The words are shared with the student's own fee page so the two cannot
+ * drift.
+ */
+function statusClassName(status: string): string {
+  if (status === "Paid") return "bg-emerald-500/15 text-emerald-600"
+  if (isRejected(status)) return "bg-red-500/15 text-red-600"
+  if (isAwaitingVerification(status)) return "bg-amber-500/15 text-amber-600"
+  return "bg-muted text-muted-foreground"
 }
 
 export default function StudentPaymentsPage() {
@@ -24,34 +44,63 @@ export default function StudentPaymentsPage() {
   const [totalFee, setTotalFee] = useState(0)
   const [paidAmount, setPaidAmount] = useState(0)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!student) return
-    async function fetch() {
-      const { data: feesRows } = await supabase
+    async function fetchPayments() {
+      setError(null)
+
+      const { data: feesRows, error: feesError } = await supabase
         .from("fees").select("total_fee, paid_amount").eq("student_id", student!.id)
+      if (feesError) {
+        console.error("[student payments] fee lookup failed:", feesError.message)
+        setError("This student's fee record could not be loaded.")
+        setLoading(false)
+        return
+      }
       if (feesRows && feesRows.length > 0) {
         setTotalFee(feesRows.reduce((s, f) => s + (f.total_fee ?? 0), 0))
         setPaidAmount(feesRows.reduce((s, f) => s + (f.paid_amount ?? 0), 0))
       }
 
-      const { data: paymentRows } = await supabase
-        .from("payments").select("id, amount, payment_date, method, status, description")
+      const { data: paymentRows, error: paymentsError } = await supabase
+        .from("payments").select("id, amount, payment_date, method, status, description, installment_id")
         .eq("student_id", student!.id).order("payment_date", { ascending: false })
 
-      if (paymentRows) {
-        setPayments(paymentRows.map((p) => ({
-          id: p.id,
-          date: p.payment_date,
-          amount: p.amount,
-          mode: p.method,
-          status: p.status === "Paid" ? "Paid" : "Pending",
-          for: p.description ?? "",
-        })))
+      if (paymentsError) {
+        console.error("[student payments] payment lookup failed:", paymentsError.message)
+        setError("This student's payment history could not be loaded.")
+        setLoading(false)
+        return
       }
+
+      // Which schedule line each payment settled. Without it the "Payment For"
+      // column showed only the free-text description, which is blank on payments
+      // the database wrote and was empty exactly when an admin most needs to know
+      // which installment a part payment went towards.
+      const installmentIds = [
+        ...new Set((paymentRows ?? []).map((row) => row.installment_id).filter(Boolean)),
+      ] as string[]
+
+      const { data: installmentRows } = installmentIds.length
+        ? await supabase.from("fee_installments").select("id, label").in("id", installmentIds)
+        : { data: [] as { id: string; label: string }[] }
+      const labelById = new Map((installmentRows ?? []).map((row) => [row.id, row.label]))
+
+      setPayments((paymentRows ?? []).map((p) => ({
+        id: p.id,
+        date: p.payment_date,
+        amount: p.amount,
+        mode: p.method,
+        status: p.status,
+        for: p.description ?? "",
+        installment: p.installment_id ? labelById.get(p.installment_id) ?? "" : "",
+      })))
+
       setLoading(false)
     }
-    fetch()
+    fetchPayments()
   }, [student])
 
   if (loading) {
@@ -62,6 +111,12 @@ export default function StudentPaymentsPage() {
 
   return (
     <div className="space-y-4">
+      {error && (
+        <Card className="border-destructive/40">
+          <CardContent className="p-4 text-sm text-destructive">{error}</CardContent>
+        </Card>
+      )}
+
       <div className="grid grid-cols-2 gap-3 sm:gap-4">
         <Card>
           <CardContent className="p-3 sm:p-4">
@@ -92,13 +147,20 @@ export default function StudentPaymentsPage() {
             <TableBody>
               {payments.map((p) => (
                 <TableRow key={p.id}>
-                  <TableCell className="font-medium">{p.for}</TableCell>
+                  <TableCell className="font-medium">
+                    {p.installment || p.for || <span className="text-muted-foreground">—</span>}
+                    {p.installment && p.for && (
+                      <span className="block max-w-64 truncate text-xs font-normal text-muted-foreground">
+                        {p.for}
+                      </span>
+                    )}
+                  </TableCell>
                   <TableCell className="hidden sm:table-cell text-muted-foreground">{p.date}</TableCell>
                   <TableCell className="hidden sm:table-cell text-muted-foreground">{p.mode}</TableCell>
                   <TableCell className="font-medium">₹{p.amount.toLocaleString()}</TableCell>
                   <TableCell>
-                    <Badge variant="secondary" className={cn("text-[10px]", p.status === "Paid" ? "bg-emerald-500/15 text-emerald-600" : "bg-amber-500/15 text-amber-600")}>
-                      {p.status}
+                    <Badge variant="secondary" className={cn("text-[10px]", statusClassName(p.status))}>
+                      {paymentStatusLabel(p.status)}
                     </Badge>
                   </TableCell>
                 </TableRow>

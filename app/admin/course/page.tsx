@@ -52,6 +52,25 @@ const statusBadge: Record<string, { label: string; className: string }> = {
   full: { label: "Full", className: "bg-amber-500/10 text-amber-600 border-amber-500/20" },
 };
 
+/**
+ * Looks a course's status up without ever returning undefined.
+ *
+ * `course_status` is an enum with a default, so the three keys above cover every
+ * row the database can hold — but the column is read as `c.status ?? "active"`,
+ * which means a course saved before the enum existed, or edited by hand, can carry
+ * anything at all. `statusBadge[course.status].className` then threw on the first
+ * access, and the whole courses page went blank for every course, not just the
+ * odd one. An unrecognised value is shown as itself rather than swallowed.
+ */
+function courseStatusBadge(status: string | null | undefined) {
+  return (
+    statusBadge[status ?? ""] ?? {
+      label: status || "Unknown",
+      className: "bg-muted text-muted-foreground border-border",
+    }
+  );
+}
+
 export default function AdminCoursesPage() {
   const [activeFilter, setActiveFilter] = useState<"all" | "long-term" | "short-term">("all");
   const [addOpen, setAddOpen] = useState(false);
@@ -227,8 +246,11 @@ export default function AdminCoursesPage() {
                     </Badge>
                   )}
                   {course.status && (
-                    <Badge variant="outline" className={cn("text-[10px] px-1.5 py-0", statusBadge[course.status].className)}>
-                      {statusBadge[course.status].label}
+                    <Badge
+                      variant="outline"
+                      className={cn("text-[10px] px-1.5 py-0", courseStatusBadge(course.status).className)}
+                    >
+                      {courseStatusBadge(course.status).label}
                     </Badge>
                   )}
                 </div>
