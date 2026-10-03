@@ -132,16 +132,6 @@ function formatCurrencyINR(value: number): string {
   return `₹${Number(value).toLocaleString("en-IN")}`;
 }
 
-function localDateKey(date: Date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`
-}
-
-function defaultFinanceRange() {
-  const today = new Date()
-  const start = new Date(today.getFullYear(), today.getMonth() - 5, 1)
-  return { from: localDateKey(start), to: localDateKey(today) }
-}
-
 export default function AdminFinancePage() {
   const { toast } = useToast();
   const [exportOpen, setExportOpen] = useState(false);
@@ -172,7 +162,7 @@ export default function AdminFinancePage() {
    */
   const [transactionLimit, setTransactionLimit] = useState<number | null>(10);
   const [refreshKey, setRefreshKey] = useState(0);
-  const [dateFilters, setDateFilters] = useState(defaultFinanceRange);
+  const [dateFilters, setDateFilters] = useState({ from: "", to: "" });
   const pendingFilterFetch = useRef<((success: boolean) => void) | null>(null);
   const filterFetchSucceeded = useRef(true);
   const [isInProfit, setIsInProfit] = useState(true);
@@ -303,7 +293,7 @@ export default function AdminFinancePage() {
       const [transactionsResult, paymentsResult, coursesResult, branchesResult] = await Promise.all([
         fetchTransactions(),
         fetchPayments(),
-        supabase.from("courses").select("slug, name"),
+        supabase.from("courses").select("slug, name, short_name"),
         supabase.from("branches").select("id, name"),
       ]);
 
@@ -339,7 +329,7 @@ export default function AdminFinancePage() {
 
       const courseMap = new Map<string, string>();
       if (coursesResult.data) {
-        coursesResult.data.forEach((c) => courseMap.set(c.slug, c.name));
+        coursesResult.data.forEach((c) => courseMap.set(c.slug, c.short_name || c.name));
       }
 
       const branchMap = new Map<string, string>();

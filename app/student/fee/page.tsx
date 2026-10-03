@@ -14,6 +14,7 @@ import { useToast } from "@/components/ui/sonner"
 import { AWAITING_VERIFICATION, PAYMENT_REJECTED } from "@/lib/payment-status"
 import { UpiPayBlock } from "@/components/student/upi-pay-block"
 import { AmountSplit, MAX_SPLIT_PARTS, readAmountParts } from "@/components/shared/amount-split"
+import { getInstallmentPaymentTotals, getRemainingInstallmentBalance } from "@/lib/payment-balances"
 
 interface Installment {
   id: string
@@ -24,6 +25,8 @@ interface Installment {
   amount: number
   paidAmount: number
   balance: number
+  remainingBalance: number
+  pendingClaimAmount: number
   payableBalance: number
   dueDate: string
   paidDate: string | null
@@ -181,17 +184,17 @@ export default function StudentFee() {
 
       const rows = (feeRowsResult ?? []) as FeeRow[]
 
-      // Read before the early return below, so a student with no fees rows yet
-      // still learns that money is already with the institute. This is the page
-      // that decides whether to pay again, and its "Pay Now" button is driven by
-      // `pending_amount` — which does not move until an admin reconciles the
-      // payment. Without this the student sees a full balance due for a fee they
-      // have already paid for, and pays twice.
+      // Read claims before the early return so the displayed balance can exclude
+      // money already awaiting review, even when this student has no fee rows.
       const { data: pendingPayments } = await supabase
         .from("payments")
-        .select("amount")
+        .select("amount, installment_id")
         .eq("student_id", student.id)
         .eq("status", AWAITING_VERIFICATION)
+      const pendingClaimTotal = (pendingPayments ?? []).reduce(
+        (sum, payment) => sum + Number(payment.amount),
+        0
+      )
 
       // Assigned unconditionally. Guarding on length left the banner in place
       // after the last claim was reconciled, telling the student money was with
@@ -262,20 +265,11 @@ export default function StudentFee() {
       // Which installments already have an unreviewed claim against them. Without
       // this the student could pay the same installment twice: the second claim
       // would be filed, and verifying both would credit the fee row twice.
-      const claimedIds = new Set<string>()
-
-      if (pendingPayments && pendingPayments.length > 0) {
-        const { data: claimedRows } = await supabase
-          .from("payments")
-          .select("installment_id")
-          .eq("student_id", student.id)
-          .eq("status", AWAITING_VERIFICATION)
-          .not("installment_id", "is", null)
-
-        for (const row of claimedRows ?? []) {
-          if (row.installment_id) claimedIds.add(row.installment_id as string)
-        }
-      }
+      const claimedIds = new Set(
+        (pendingPayments ?? [])
+          .map((payment) => payment.installment_id)
+          .filter((id): id is string => Boolean(id))
+      )
 
       const { data: settledPayments, error: settledPaymentsError } = await supabase
         .from("payments")
@@ -297,6 +291,13 @@ export default function StudentFee() {
         paidByInstallment[payment.installment_id] =
           (paidByInstallment[payment.installment_id] ?? 0) + Number(payment.amount)
       }
+      const pendingByInstallment = getInstallmentPaymentTotals(
+        (pendingPayments ?? []).map((payment) => ({
+          installment_id: payment.installment_id,
+          amount: Number(payment.amount),
+          status: AWAITING_VERIFICATION,
+        }))
+      )
 
       // One row per installment, kept as itself. These used to be merged by the
       // number at the end of their label, so "Installment 1" of two different
@@ -309,6 +310,11 @@ export default function StudentFee() {
           const ledgerPaid = paidByInstallment[i.id] ?? 0
           const paidAmount = Math.min(amount, i.status === "Paid" ? Math.max(ledgerPaid, amount) : ledgerPaid)
           const balance = Math.max(0, Number((amount - paidAmount).toFixed(2)))
+          const pendingClaimAmount = Math.min(balance, pendingByInstallment.get(i.id as string)?.pending ?? 0)
+          const remainingBalance = getRemainingInstallmentBalance(amount, {
+            paid: paidAmount,
+            pending: pendingClaimAmount,
+          })
           const awaitingVerification = claimedIds.has(i.id as string)
           const feeRow = feeById.get(i.fee_id as string)
 
@@ -321,6 +327,8 @@ export default function StudentFee() {
             amount,
             paidAmount,
             balance,
+            remainingBalance,
+            pendingClaimAmount,
             payableBalance: balance > 0 && !awaitingVerification ? balance : 0,
             dueDate: i.due_date,
             paidDate: i.paid_date,
@@ -358,7 +366,15 @@ export default function StudentFee() {
           name: nameFor(fee.course_slug),
           totalFee: Number(fee.total_fee),
           paid: Number(fee.paid_amount),
-          pending: Number(fee.pending_amount),
+          pending: Math.max(
+            0,
+            Number((
+              Number(fee.pending_amount) -
+              installments
+                .filter((installment) => installment.feeId === fee.id)
+                .reduce((sum, installment) => sum + installment.pendingClaimAmount, 0)
+            ).toFixed(2))
+          ),
           payable: payableByFee.get(fee.id) ?? Number(fee.pending_amount),
         }))
         .sort((a, b) => a.name.localeCompare(b.name))
@@ -386,7 +402,7 @@ export default function StudentFee() {
         courses,
         totalFee,
         paid: totalPaid,
-        pending: totalPending,
+        pending: Math.max(0, Number((totalPending - pendingClaimTotal).toFixed(2))),
         installments,
       })
 
@@ -934,9 +950,9 @@ export default function StudentFee() {
                 {awaitingVerification.count === 1 ? "Payment" : "Payments"} awaiting verification
               </p>
               <p className="mt-0.5 text-xs sm:text-sm text-muted-foreground">
-                &nbsp;&#8377;{awaitingVerification.amount.toLocaleString("en-IN")} is already with us
-                and is counted in the remaining balance below. Our team checks every UPI reference
-                by hand. Please wait for it to clear before paying this amount again.
+                &nbsp;&#8377;{awaitingVerification.amount.toLocaleString("en-IN")} is awaiting review.
+                The remaining balances below already exclude these claims. Please wait for them to
+                clear before paying those amounts again.
               </p>
             </div>
           </div>
@@ -997,7 +1013,7 @@ export default function StudentFee() {
                     </p>
                   </div>
                   <div className="rounded-lg bg-amber-500/10 px-3 py-2.5">
-                    <p className="text-xs text-muted-foreground">Pending</p>
+                    <p className="text-xs text-muted-foreground">Still due</p>
                     <p className="text-lg font-bold text-amber-600 lg:text-xl">
                       ₹{course.pending.toLocaleString("en-IN")}
                     </p>
@@ -1036,7 +1052,7 @@ export default function StudentFee() {
                 </span>
               </div>
               <div className="flex items-baseline justify-between text-sm lg:text-base">
-                <span className="text-muted-foreground">Pending across all courses</span>
+                <span className="text-muted-foreground">Still due across all courses</span>
                 <span className="font-semibold text-amber-600">
                   ₹{feeDetails.pending.toLocaleString("en-IN")}
                 </span>
@@ -1075,9 +1091,12 @@ export default function StudentFee() {
                     <p className="truncate text-xs text-muted-foreground lg:text-sm">
                       Due: {inst.dueDate}{inst.paidDate ? ` · Last payment: ${inst.paidDate}` : ""}
                     </p>
-                    {inst.paidAmount > 0 && inst.balance > 0 && (
+                    {(inst.paidAmount > 0 || inst.pendingClaimAmount > 0) && (
                       <p className="mt-0.5 text-[11px] text-muted-foreground lg:text-xs">
-                        ₹{inst.paidAmount.toLocaleString("en-IN")} paid · ₹{inst.balance.toLocaleString("en-IN")} remaining
+                        {inst.paidAmount > 0 && `₹${inst.paidAmount.toLocaleString("en-IN")} paid`}
+                        {inst.paidAmount > 0 && inst.pendingClaimAmount > 0 && " · "}
+                        {inst.pendingClaimAmount > 0 &&
+                          `₹${inst.pendingClaimAmount.toLocaleString("en-IN")} awaiting verification`}
                       </p>
                     )}
                     {inst.awaitingVerification && (
@@ -1091,10 +1110,11 @@ export default function StudentFee() {
                   </div>
                 </div>
                 <div className="ml-4 shrink-0 text-right">
-                  <p className="text-sm font-bold lg:text-base">₹{inst.balance.toLocaleString("en-IN")}</p>
-                  {inst.balance < inst.amount && (
+                  <p className="text-sm font-bold lg:text-base">₹{inst.remainingBalance.toLocaleString("en-IN")}</p>
+                  {inst.remainingBalance < inst.amount && (
                     <p className="text-[10px] text-muted-foreground">of ₹{inst.amount.toLocaleString("en-IN")}</p>
                   )}
+                  <p className="text-[10px] text-muted-foreground">still due</p>
                   {inst.awaitingVerification ? (
                     <Badge
                       variant="secondary"

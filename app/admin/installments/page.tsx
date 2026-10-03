@@ -43,6 +43,7 @@ import { supabase } from "@/lib/supabase"
 import { useToast } from "@/components/ui/sonner"
 import { FilterDialog, type FilterField, type FilterValues } from "@/components/admin/filter-dialog"
 import { CollectDialog, type CollectibleInstallment } from "@/components/admin/collect-dialog"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
 interface Installment {
   id: string
@@ -55,6 +56,7 @@ interface Installment {
   amount: number
   paidAmount: number
   balance: number
+  remainingBalance: number
   pendingClaimAmount: number
   pendingPaymentIds: string[]
   pendingReference: string
@@ -129,6 +131,9 @@ export default function InstallmentsPage() {
     let query = supabase
       .from("fee_installments")
       .select("*, fees!inner(id, student_id, course_slug, students!inner(full_name, branch_id))", { count: "exact" })
+      // PostgreSQL's descending status order gives Pending, Partial, then Paid.
+      // Keep due dates ascending within each status so open lines are seen first.
+      .order("status", { ascending: false })
       .order("due_date", { ascending: true })
 
     const safeSearch = searchTerm.trim().slice(0, 80).replace(/[^\p{L}\p{N}\s@._+-]/gu, "")
@@ -162,8 +167,10 @@ export default function InstallmentsPage() {
         return true
       }
       query = query.in("id", uniqueClaimIds)
-    } else if (selectedStatus !== "all") {
-      query = query.eq("status", selectedStatus === "paid" ? "Paid" : selectedStatus === "partial" ? "Partial" : "Pending")
+    } else if (selectedStatus === "pending") {
+      query = query.in("status", ["Pending", "Partial"])
+    } else if (selectedStatus === "partial" || selectedStatus === "paid") {
+      query = query.eq("status", selectedStatus === "paid" ? "Paid" : "Partial")
     }
     if (selectedPeriod === "date" && selectedPeriodValue) query = query.eq("due_date", selectedPeriodValue)
     if (selectedPeriod === "month" && selectedPeriodValue) {
@@ -235,11 +242,11 @@ export default function InstallmentsPage() {
 
     const [studentsRes, coursesRes] = await Promise.all([
       supabase.from("students").select("id, full_name, branch_id").in("id", studentIds),
-      supabase.from("courses").select("slug, name").in("slug", courseSlugs),
+      supabase.from("courses").select("slug, name, short_name").in("slug", courseSlugs),
     ])
 
     const studentsMap: Record<string, StudentMapEntry> = Object.fromEntries((studentsRes.data || []).map((s) => [s.id, s]))
-    const coursesMap: Record<string, string> = Object.fromEntries((coursesRes.data || []).map((c) => [c.slug, c.name]))
+    const coursesMap: Record<string, string> = Object.fromEntries((coursesRes.data || []).map((c) => [c.slug, c.short_name || c.name]))
 
     const branchIds = [...new Set((studentsRes.data || []).map((s) => s.branch_id).filter(Boolean))] as string[]
     let branchesMap: Record<string, string> = {}
@@ -266,6 +273,8 @@ export default function InstallmentsPage() {
       const pendingClaim = pendingByInstallment[row.id]
       const paidAmount = Math.min(row.amount, row.status === "Paid" ? Math.max(ledgerPaid, row.amount) : ledgerPaid)
       const balance = Math.max(0, Number((row.amount - paidAmount).toFixed(2)))
+      const pendingClaimAmount = Math.min(balance, pendingClaim?.amount ?? 0)
+      const remainingBalance = Math.max(0, Number((balance - pendingClaimAmount).toFixed(2)))
 
       return {
         id: row.id,
@@ -278,7 +287,8 @@ export default function InstallmentsPage() {
         amount: row.amount,
         paidAmount,
         balance,
-        pendingClaimAmount: pendingClaim?.amount ?? 0,
+        remainingBalance,
+        pendingClaimAmount,
         pendingPaymentIds: pendingClaim?.ids ?? [],
         pendingReference: pendingClaim?.reference ?? "",
         dueDate: row.due_date,
@@ -292,7 +302,7 @@ export default function InstallmentsPage() {
     setInstallments(parsed)
 
     const totalCollected = parsed.reduce((sum, i) => sum + i.paidAmount, 0)
-    const pendingAmount = parsed.reduce((sum, i) => sum + i.balance, 0)
+    const pendingAmount = parsed.reduce((sum, i) => sum + i.remainingBalance, 0)
     const now = new Date()
     const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`
     const thisMonthAmount = (payments ?? [])
@@ -302,8 +312,8 @@ export default function InstallmentsPage() {
     // Overdue counts only the outstanding balance on installments past due.
     const today = now.toISOString().split("T")[0]
     const overdueAmount = parsed
-      .filter((i) => i.balance > 0 && i.dueDate < today)
-      .reduce((sum, i) => sum + i.balance, 0)
+      .filter((i) => i.remainingBalance > 0 && i.dueDate < today)
+      .reduce((sum, i) => sum + i.remainingBalance, 0)
 
     setStats([
       { label: "Page collected", value: `₹${totalCollected.toLocaleString("en-IN")}`, color: "text-emerald-600 dark:text-emerald-400" },
@@ -421,7 +431,7 @@ export default function InstallmentsPage() {
 
   const handleExport = async () => {
     setExporting(true)
-    const csvRows: unknown[][] = [["Student", "Student ID", "Course", "Installment", "Amount", "Paid", "Balance", "Due Date", "Paid Date", "Status", "Branch"]]
+    const csvRows: unknown[][] = [["Student", "Student ID", "Course", "Installment", "Amount", "Paid", "Awaiting Verification", "Balance", "Due Date", "Paid Date", "Status", "Branch"]]
     const safeSearch = search.trim().slice(0, 80).replace(/[^\p{L}\p{N}\s@._+-]/gu, "")
 
     try {
@@ -443,10 +453,12 @@ export default function InstallmentsPage() {
       while (true) {
         let query = supabase.from("fee_installments")
           .select("id, fee_id, label, installment_no, amount, due_date, paid_date, status, fees!inner(student_id, course_slug, students!inner(full_name, branch_id))")
+          .order("status", { ascending: false })
           .order("due_date", { ascending: true })
         if (safeSearch) query = query.or(`label.ilike.%${safeSearch}%,fees.course_slug.ilike.%${safeSearch}%,fees.students.full_name.ilike.%${safeSearch}%`)
         if (claimIds) query = claimIds.length ? query.in("id", claimIds) : query.eq("id", "")
-        else if (filter !== "all") query = query.eq("status", filter === "paid" ? "Paid" : filter === "partial" ? "Partial" : "Pending")
+        else if (filter === "pending") query = query.in("status", ["Pending", "Partial"])
+        else if (filter === "paid" || filter === "partial") query = query.eq("status", filter === "paid" ? "Paid" : "Partial")
         if (periodType === "date" && periodValue) query = query.eq("due_date", periodValue)
         if (periodType === "month" && periodValue) {
           const [year, month] = periodValue.split("-").map(Number)
@@ -472,15 +484,21 @@ export default function InstallmentsPage() {
           .filter(Boolean))] as string[]
         const [paymentsResult, coursesResult, branchesResult] = await Promise.all([
           supabase.from("payments").select("installment_id, amount, status").in("installment_id", ids).in("status", ["Paid", "Pending"]),
-          slugs.length ? supabase.from("courses").select("slug, name").in("slug", slugs) : Promise.resolve({ data: [] as { slug: string; name: string }[], error: null }),
+          slugs.length ? supabase.from("courses").select("slug, name, short_name").in("slug", slugs) : Promise.resolve({ data: [] as { slug: string; name: string; short_name: string }[], error: null }),
           branchIds.length ? supabase.from("branches").select("id, name").in("id", branchIds) : Promise.resolve({ data: [] as { id: string; name: string }[], error: null }),
         ])
         if (paymentsResult.error || coursesResult.error || branchesResult.error) throw new Error("Unable to load export details")
         const paidById = new Map<string, number>()
+        const pendingById = new Map<string, number>()
         for (const payment of paymentsResult.data ?? []) {
-          if (payment.status === "Paid" && payment.installment_id) paidById.set(payment.installment_id, (paidById.get(payment.installment_id) ?? 0) + Number(payment.amount))
+          if (!payment.installment_id) continue
+          if (payment.status === "Paid") {
+            paidById.set(payment.installment_id, (paidById.get(payment.installment_id) ?? 0) + Number(payment.amount))
+          } else if (payment.status === "Pending") {
+            pendingById.set(payment.installment_id, (pendingById.get(payment.installment_id) ?? 0) + Number(payment.amount))
+          }
         }
-        const coursesBySlug = new Map((coursesResult.data ?? []).map((course) => [course.slug, course.name]))
+        const coursesBySlug = new Map((coursesResult.data ?? []).map((course) => [course.slug, course.short_name || course.name]))
         const branchesById = new Map((branchesResult.data ?? []).map((branch) => [branch.id, branch.name]))
         for (const row of rows) {
           const fee = unwrapFirst(row.fees)
@@ -488,6 +506,8 @@ export default function InstallmentsPage() {
           const amount = Number(row.amount)
           const paidAmount = Math.min(amount, row.status === "Paid" ? Math.max(paidById.get(row.id) ?? 0, amount) : paidById.get(row.id) ?? 0)
           const balance = Math.max(0, Number((amount - paidAmount).toFixed(2)))
+          const awaitingAmount = Math.min(balance, pendingById.get(row.id) ?? 0)
+          const remainingBalance = Math.max(0, Number((balance - awaitingAmount).toFixed(2)))
           csvRows.push([
             studentInfo?.full_name ?? "Unknown",
             fee?.student_id ?? "",
@@ -495,10 +515,11 @@ export default function InstallmentsPage() {
             row.label,
             amount,
             paidAmount,
-            balance,
+            awaitingAmount,
+            remainingBalance,
             row.due_date,
             row.paid_date ?? "",
-            balance === 0 ? "Paid" : paidAmount > 0 ? "Partial" : "Pending",
+            awaitingAmount > 0 ? "Awaiting verification" : balance === 0 ? "Paid" : paidAmount > 0 ? "Partial" : "Pending",
             branchesById.get(studentInfo?.branch_id ?? "") ?? "",
           ])
         }
@@ -541,19 +562,6 @@ export default function InstallmentsPage() {
   })
   const installmentFilterFields: FilterField[] = [
     {
-      key: "status",
-      label: "Payment status",
-      type: "select",
-      defaultValue: "all",
-      options: [
-        { value: "all", label: "All statuses" },
-        { value: "paid", label: "Paid" },
-        { value: "pending", label: "Pending" },
-        { value: "partial", label: "Partial" },
-        { value: "confirm", label: "Awaiting confirmation" },
-      ],
-    },
-    {
       key: "period",
       label: "Due-date period",
       type: "select",
@@ -578,7 +586,7 @@ export default function InstallmentsPage() {
   ]
 
   async function applyInstallmentFilters(values: FilterValues) {
-    const nextStatus = values.status || "all"
+    const nextStatus = filter
     const nextPeriod = values.period || "all"
     const nextValue = nextPeriod === "date" ? values.date || ""
       : nextPeriod === "month" ? values.month || ""
@@ -609,11 +617,11 @@ export default function InstallmentsPage() {
         </div>
       </div>
 
-      <div className="grid gap-2 grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
         {stats.map((stat) => (
           <Card key={stat.label}>
-            <CardContent className="flex items-center justify-between">
-              <p className="text-[11px] text-muted-foreground truncate">{stat.label}</p>
+            <CardContent className="flex flex-col items-start gap-1 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-[11px] leading-tight text-muted-foreground sm:truncate">{stat.label}</p>
               <p className={cn("text-sm font-bold shrink-0", stat.color)}>{stat.value}</p>
             </CardContent>
           </Card>
@@ -629,39 +637,190 @@ export default function InstallmentsPage() {
                 Showing {paginated.length} of {totalCount.toLocaleString()} matching installments
               </p>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center">
               <div className="relative w-full sm:w-auto">
                 <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   placeholder="Search student or course..."
                   value={search}
                   onChange={(e) => { setSearch(e.target.value); setCurrentPage(1) }}
-                  className="w-full pl-8 sm:w-72"
+                  className="w-full pl-8 sm:w-64 lg:w-72"
                 />
               </div>
-              <FilterDialog
-                title="Filter installments"
-                description="Stage status and due-date filters, then apply them together."
-                fields={installmentFilterFields}
-                values={{
-                  status: filter,
-                  period: periodType,
-                  month: periodType === "month" ? periodValue : "",
-                  date: periodType === "date" ? periodValue : "",
-                  quarter: periodType === "quarter" ? periodValue : "",
-                }}
-                onApply={applyInstallmentFilters}
-                onClear={applyInstallmentFilters}
-              />
-              <Button variant="outline" size="sm" onClick={handleExport} disabled={exporting}>
-                <Download className="h-4 w-4" />
-                <span className="hidden sm:inline">{exporting ? "Preparing..." : "Export"}</span>
-              </Button>
+              <div className="flex w-full items-center gap-2 sm:w-auto">
+                <FilterDialog
+                  title="Filter installments"
+                  description="Filter installments by due date."
+                  fields={installmentFilterFields}
+                  values={{
+                    period: periodType,
+                    month: periodType === "month" ? periodValue : "",
+                    date: periodType === "date" ? periodValue : "",
+                    quarter: periodType === "quarter" ? periodValue : "",
+                  }}
+                  onApply={applyInstallmentFilters}
+                  onClear={applyInstallmentFilters}
+                />
+                <Button variant="outline" size="sm" onClick={handleExport} disabled={exporting}>
+                  <Download className="h-4 w-4" />
+                  <span>{exporting ? "Preparing..." : "Export"}</span>
+                </Button>
+              </div>
             </div>
           </div>
+          <Tabs
+            value={filter}
+            onValueChange={(value) => {
+              if (!value) return
+              setFilter(value)
+              setCurrentPage(1)
+            }}
+            className="mt-4"
+          >
+            <TabsList className="h-auto w-full justify-start gap-1 overflow-x-auto sm:w-fit">
+              <TabsTrigger className="min-w-fit px-3" value="all">All</TabsTrigger>
+              <TabsTrigger className="min-w-fit px-3" value="pending">Pending</TabsTrigger>
+            </TabsList>
+          </Tabs>
         </CardContent>
 
         <CardContent className="space-y-4">
+          <div className="space-y-3 xl:hidden">
+            {paginated.map((inst) => {
+              const cfg = statusConfig[inst.status]
+              const Icon = cfg.icon
+              const isFullyPaid = inst.paidAmount >= inst.amount
+              return (
+                <article
+                  key={inst.id}
+                  className={cn(
+                    "relative space-y-3 overflow-hidden rounded-lg border bg-card p-3 pl-4 sm:p-4 sm:pl-5",
+                    "before:absolute before:inset-y-[20%] before:left-0 before:w-1 before:rounded-full",
+                    isFullyPaid ? "before:bg-emerald-500" : "before:bg-amber-500"
+                  )}
+                >
+                  <div className="flex min-w-0 items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="truncate font-medium">{inst.studentName}</p>
+                      <p className="truncate text-xs text-muted-foreground">{inst.course}</p>
+                    </div>
+                    {inst.pendingPaymentIds.length > 0 ? (
+                      <Badge variant="secondary" className="shrink-0 gap-1 bg-amber-500/15 text-amber-700 dark:text-amber-400">
+                        <Clock className="size-3" />
+                        Awaiting review
+                      </Badge>
+                    ) : (
+                      <Badge variant="secondary" className={cn("shrink-0 gap-1", cfg.className)}>
+                        <Icon className="size-3" />
+                        {inst.status}
+                      </Badge>
+                    )}
+                  </div>
+
+                  <div className="min-w-0">
+                    <p className="font-medium">{inst.label}</p>
+                    {inst.pendingPaymentIds.length > 0 && (
+                      <p className="text-xs text-amber-700 dark:text-amber-400">
+                        ₹{inst.pendingClaimAmount.toLocaleString("en-IN")} payment awaiting confirmation
+                      </p>
+                    )}
+                    {inst.pendingReference && (
+                      <p className="truncate text-xs text-muted-foreground" title={inst.pendingReference}>
+                        {inst.pendingReference}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2 border-y py-2.5">
+                    <div className="min-w-0">
+                      <p className="text-[11px] text-muted-foreground">Amount</p>
+                      <p className="truncate text-sm font-medium">₹{inst.amount.toLocaleString("en-IN")}</p>
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-[11px] text-muted-foreground">Paid</p>
+                      <p className="truncate text-sm font-medium text-emerald-700 dark:text-emerald-400">
+                        ₹{inst.paidAmount.toLocaleString("en-IN")}
+                      </p>
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-[11px] text-muted-foreground">
+                        {inst.pendingClaimAmount > 0 ? "Due after confirmation" : "Still due"}
+                      </p>
+                      <p className="truncate text-sm font-semibold">₹{inst.remainingBalance.toLocaleString("en-IN")}</p>
+                      {inst.pendingClaimAmount > 0 && (
+                        <p className="truncate text-[10px] text-muted-foreground">
+                          ₹{inst.pendingClaimAmount.toLocaleString("en-IN")} awaiting
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
+                    <span>Due: {inst.dueDate}</span>
+                    <span>Paid: {inst.paidDate ?? "—"}</span>
+                  </div>
+
+                  <div className="flex min-h-10 items-center justify-end gap-2 border-t pt-2">
+                    {inst.pendingPaymentIds.length > 0 ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="min-h-10 gap-2 border-emerald-600/30 text-emerald-700 hover:bg-emerald-600/10 dark:text-emerald-400"
+                        onClick={() => handleConfirmClaim(inst)}
+                        disabled={verifyingId !== null}
+                        title="Confirm this student payment"
+                      >
+                        {verifyingId === inst.id ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
+                        Confirm
+                      </Button>
+                    ) : inst.status !== "Paid" && (
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="size-10"
+                        onClick={() => setCollecting({
+                          id: inst.id,
+                          student: inst.studentName,
+                          label: inst.label,
+                          title: inst.course,
+                          amount: inst.amount,
+                          balance: inst.balance,
+                          settleAll: true,
+                        })}
+                        title="Collect payment against this installment"
+                        aria-label={`Collect payment from ${inst.studentName}`}
+                      >
+                        <Banknote className="size-4 text-emerald-600" />
+                      </Button>
+                    )}
+                    {(inst.status === "Paid" || inst.status === "Partial") && (
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="size-10"
+                        onClick={() => setConfirmUnmark(inst)}
+                        title="Reverse verified payments"
+                        aria-label={`Reverse verified payments for ${inst.studentName}`}
+                        disabled={unmarkingId === inst.id}
+                      >
+                        {unmarkingId === inst.id
+                          ? <Loader2 className="size-4 animate-spin text-muted-foreground" />
+                          : <RotateCcw className="size-4 text-amber-600" />}
+                      </Button>
+                    )}
+                  </div>
+                </article>
+              )
+            })}
+            {paginated.length === 0 && (
+              <div className="flex min-h-28 flex-col items-center justify-center gap-2 rounded-lg border text-center">
+                <Clock className="size-8 text-muted-foreground/50" />
+                <p className="text-sm text-muted-foreground">No installments found</p>
+              </div>
+            )}
+          </div>
+
+          <div className="hidden overflow-x-auto xl:block">
           <Table>
             <TableHeader>
               <TableRow>
@@ -681,9 +840,17 @@ export default function InstallmentsPage() {
               {paginated.map((inst) => {
                 const cfg = statusConfig[inst.status]
                 const Icon = cfg.icon
+                const isFullyPaid = inst.paidAmount >= inst.amount
                 return (
-                  <TableRow key={inst.id}>
-                    <TableCell>
+                  <TableRow
+                    key={inst.id}
+                  >
+                    <TableCell
+                      className={cn(
+                        "relative before:absolute before:inset-y-[20%] before:left-0 before:w-1 before:rounded-full",
+                        isFullyPaid ? "before:bg-emerald-500" : "before:bg-amber-500"
+                      )}
+                    >
                       <div>
                         <p className="font-medium">{inst.studentName}</p>
                         <p className="text-xs text-muted-foreground md:hidden">{inst.course}</p>
@@ -695,7 +862,7 @@ export default function InstallmentsPage() {
                         <span className="font-medium">{inst.label}</span>
                         {inst.pendingPaymentIds.length > 0 && (
                           <p className="text-xs text-amber-700 dark:text-amber-400">
-                            ₹{inst.pendingClaimAmount.toLocaleString("en-IN")} claimed · awaiting review
+                            ₹{inst.pendingClaimAmount.toLocaleString("en-IN")} payment awaiting confirmation
                           </p>
                         )}
                         {inst.pendingReference && (
@@ -707,7 +874,14 @@ export default function InstallmentsPage() {
                     </TableCell>
                     <TableCell className="hidden sm:table-cell font-medium">₹{inst.amount.toLocaleString("en-IN")}</TableCell>
                     <TableCell className="hidden md:table-cell text-emerald-700 dark:text-emerald-400">₹{inst.paidAmount.toLocaleString("en-IN")}</TableCell>
-                    <TableCell className="font-semibold">₹{inst.balance.toLocaleString("en-IN")}</TableCell>
+                    <TableCell className="font-semibold">
+                      ₹{inst.remainingBalance.toLocaleString("en-IN")}
+                      {inst.pendingClaimAmount > 0 && (
+                        <span className="block whitespace-nowrap text-xs font-normal text-muted-foreground">
+                          ₹{inst.pendingClaimAmount.toLocaleString("en-IN")} awaiting confirmation
+                        </span>
+                      )}
+                    </TableCell>
                     <TableCell className="hidden lg:table-cell text-muted-foreground">{inst.dueDate}</TableCell>
                     <TableCell className="hidden lg:table-cell text-muted-foreground">{inst.paidDate ?? "—"}</TableCell>
                     <TableCell>
@@ -795,16 +969,18 @@ export default function InstallmentsPage() {
               )}
             </TableBody>
           </Table>
+          </div>
         </CardContent>
 
-        <CardFooter className="flex items-center justify-between">
-          <p className="text-sm text-muted-foreground">
+        <CardFooter className="flex flex-col items-stretch justify-between gap-3 sm:flex-row sm:items-center">
+          <p className="text-center text-sm text-muted-foreground sm:text-left">
             Page {currentPage} of {totalPages || 1}
           </p>
-          <div className="flex items-center gap-2">
+          <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center">
             <Button
               variant="outline"
               size="sm"
+              className="min-h-10"
               onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
               disabled={currentPage === 1}
             >
@@ -814,6 +990,7 @@ export default function InstallmentsPage() {
             <Button
               variant="outline"
               size="sm"
+              className="min-h-10"
               onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
               disabled={currentPage === totalPages || totalPages === 0}
             >

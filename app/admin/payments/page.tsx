@@ -99,6 +99,7 @@ export default function PaymentsPage() {
   const [totalCount, setTotalCount] = useState(0)
   const [weeklyData, setWeeklyData] = useState<WeeklyDatum[]>([])
   const [loading, setLoading] = useState(true)
+  const [paymentsError, setPaymentsError] = useState(false)
   const requestId = useRef(0)
   const manualFetchKey = useRef<string | null>(null)
   const rowsPerPage = 8
@@ -118,11 +119,22 @@ export default function PaymentsPage() {
 
     const { data: paymentsData, error, count } = await query.range((page - 1) * rowsPerPage, page * rowsPerPage - 1)
     if (error) {
-      console.error("Error fetching payments:", error)
-      if (activeRequest === requestId.current) setLoading(false)
+      console.error("Error fetching payments:", {
+        message: error.message,
+        code: error.code,
+        details: error.details,
+        hint: error.hint,
+      })
+      if (activeRequest === requestId.current) {
+        setPaymentsError(true)
+        setPayments([])
+        setTotalCount(0)
+        setLoading(false)
+      }
       return false
     }
     if (activeRequest !== requestId.current) return true
+    setPaymentsError(false)
 
     const slugs = [...new Set((paymentsData ?? []).map((payment) => payment.course_slug).filter(Boolean))] as string[]
     const installmentIds = [
@@ -130,8 +142,8 @@ export default function PaymentsPage() {
     ] as string[]
     const [coursesResult, installmentsResult] = await Promise.all([
       slugs.length
-        ? supabase.from("courses").select("slug, name").in("slug", slugs)
-        : Promise.resolve({ data: [] as { slug: string; name: string }[], error: null }),
+        ? supabase.from("courses").select("slug, name, short_name").in("slug", slugs)
+        : Promise.resolve({ data: [] as { slug: string; name: string; short_name: string }[], error: null }),
       installmentIds.length
         ? supabase.from("fee_installments").select("id, fee_id").in("id", installmentIds)
         : Promise.resolve({ data: [] as { id: string; fee_id: string }[], error: null }),
@@ -152,9 +164,41 @@ export default function PaymentsPage() {
       return false
     }
 
-    const courseMap = new Map((coursesResult.data ?? []).map((course) => [course.slug, course.name]))
+    const { data: feeInstallments, error: feeInstallmentsError } = feeIds.length
+      ? await supabase.from("fee_installments").select("id, fee_id").in("fee_id", feeIds)
+      : { data: [] as { id: string; fee_id: string }[], error: null }
+    if (feeInstallmentsError) {
+      console.error("Error fetching payment installment balances:", feeInstallmentsError.message)
+      if (activeRequest === requestId.current) setLoading(false)
+      return false
+    }
+
+    const feeInstallmentIds = (feeInstallments ?? []).map((installment) => installment.id)
+    const { data: pendingClaims, error: pendingClaimsError } = feeInstallmentIds.length
+      ? await supabase
+        .from("payments")
+        .select("installment_id, amount")
+        .eq("status", "Pending")
+        .in("installment_id", feeInstallmentIds)
+      : { data: [] as { installment_id: string | null; amount: number }[], error: null }
+    if (pendingClaimsError) {
+      console.error("Error fetching pending payment balances:", pendingClaimsError.message)
+      if (activeRequest === requestId.current) setLoading(false)
+      return false
+    }
+
+    const courseMap = new Map((coursesResult.data ?? []).map((course) => [course.slug, course.short_name || course.name]))
     const feeByInstallment = new Map((installmentsResult.data ?? []).map((row) => [row.id, row.fee_id]))
-    const balanceByFee = new Map((feeRows ?? []).map((fee) => [fee.id, Number(fee.pending_amount ?? 0)]))
+    const feeByInstallmentId = new Map((feeInstallments ?? []).map((row) => [row.id, row.fee_id]))
+    const pendingByFee = new Map<string, number>()
+    for (const claim of pendingClaims ?? []) {
+      const feeId = claim.installment_id ? feeByInstallmentId.get(claim.installment_id) : undefined
+      if (feeId) pendingByFee.set(feeId, (pendingByFee.get(feeId) ?? 0) + Number(claim.amount))
+    }
+    const balanceByFee = new Map((feeRows ?? []).map((fee) => [
+      fee.id,
+      Math.max(0, Number((Number(fee.pending_amount ?? 0) - (pendingByFee.get(fee.id) ?? 0)).toFixed(2))),
+    ]))
     setPayments((paymentsData ?? []).map((payment) => {
       const feeId = payment.installment_id ? feeByInstallment.get(payment.installment_id) : undefined
       return {
@@ -263,9 +307,9 @@ export default function PaymentsPage() {
 
       const slugs = [...new Set(rows.map((row) => row.course_slug).filter(Boolean))] as string[]
       const { data: courseRows } = slugs.length
-        ? await supabase.from("courses").select("slug, name").in("slug", slugs)
-        : { data: [] as { slug: string; name: string }[] }
-      const courseNames = new Map((courseRows ?? []).map((row) => [row.slug, row.name]))
+        ? await supabase.from("courses").select("slug, name, short_name").in("slug", slugs)
+        : { data: [] as { slug: string; name: string; short_name: string }[] }
+      const courseNames = new Map((courseRows ?? []).map((row) => [row.slug, row.short_name || row.name]))
       setExportRows(rows.map((row) => ({
         ID: row.id,
         Student: row.student_name,
@@ -364,6 +408,13 @@ export default function PaymentsPage() {
             </div>
           </div>
         </CardHeader>
+        {paymentsError && (
+          <CardContent>
+            <p role="alert" className="text-sm text-destructive">
+              Payments could not be loaded. Please refresh the page or try again later.
+            </p>
+          </CardContent>
+        )}
         <CardContent>
           <Table>
             <TableHeader>
@@ -395,11 +446,11 @@ export default function PaymentsPage() {
                     <TableCell className="text-muted-foreground">{payment.course}</TableCell>
                     <TableCell className="text-right">
                       <span className="font-medium">{payment.amount}</span>
-                      {payment.remainingBalance !== null && payment.status === "Paid" && (
+                      {payment.remainingBalance !== null && (payment.status === "Paid" || payment.status === "Pending") && (
                         <span className="block whitespace-nowrap text-xs font-normal text-muted-foreground">
                           {payment.remainingBalance > 0
-                            ? `₹${payment.remainingBalance.toLocaleString("en-IN")} remaining`
-                            : "Paid in full"}
+                            ? `₹${payment.remainingBalance.toLocaleString("en-IN")} still due`
+                            : "No balance still due"}
                         </span>
                       )}
                     </TableCell>

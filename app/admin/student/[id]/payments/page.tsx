@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils"
 import { supabase } from "@/lib/supabase"
 import { isAwaitingVerification, isRejected, paymentStatusLabel } from "@/lib/payment-status"
 import { useStudent } from "../layout"
+import { getInstallmentPaymentTotals, getRemainingInstallmentBalance } from "@/lib/payment-balances"
 
 interface Payment {
   id: string
@@ -20,6 +21,7 @@ interface Payment {
   course: string
   /** The schedule line this money landed on, when it landed on one. */
   installment: string
+  remainingBalance: number | null
 }
 
 /**
@@ -44,6 +46,7 @@ export default function StudentPaymentsPage() {
   const [payments, setPayments] = useState<Payment[]>([])
   const [totalFee, setTotalFee] = useState(0)
   const [paidAmount, setPaidAmount] = useState(0)
+  const [awaitingAmount, setAwaitingAmount] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -79,6 +82,17 @@ export default function StudentPaymentsPage() {
       setPaidAmount((paymentRows ?? [])
         .filter((payment) => payment.status === "Paid")
         .reduce((sum, payment) => sum + Number(payment.amount), 0))
+      const pendingClaimAmount = (paymentRows ?? [])
+        .filter((payment) => isAwaitingVerification(payment.status))
+        .reduce((sum, payment) => sum + Number(payment.amount), 0)
+      setAwaitingAmount(pendingClaimAmount)
+      const paymentTotals = getInstallmentPaymentTotals(
+        (paymentRows ?? []).map((payment) => ({
+          installment_id: payment.installment_id,
+          amount: Number(payment.amount),
+          status: payment.status,
+        }))
+      )
 
       // Which schedule line each payment settled. Without it the "Payment For"
       // column showed only the free-text description, which is blank on payments
@@ -93,11 +107,11 @@ export default function StudentPaymentsPage() {
 
       const [installmentResult, courseResult] = await Promise.all([
         installmentIds.length
-          ? supabase.from("fee_installments").select("id, label").in("id", installmentIds)
-          : Promise.resolve({ data: [] as { id: string; label: string }[], error: null }),
+          ? supabase.from("fee_installments").select("id, label, amount").in("id", installmentIds)
+          : Promise.resolve({ data: [] as { id: string; label: string; amount: number }[], error: null }),
         courseSlugs.length
-          ? supabase.from("courses").select("slug, name").in("slug", courseSlugs)
-          : Promise.resolve({ data: [] as { slug: string; name: string }[], error: null }),
+          ? supabase.from("courses").select("slug, name, short_name").in("slug", courseSlugs)
+          : Promise.resolve({ data: [] as { slug: string; name: string; short_name: string }[], error: null }),
       ])
       if (installmentResult.error) {
         console.error("[student payments] installment lookup failed:", installmentResult.error.message)
@@ -113,18 +127,30 @@ export default function StudentPaymentsPage() {
       }
       const installmentRows = installmentResult.data
       const labelById = new Map((installmentRows ?? []).map((row) => [row.id, row.label]))
-      const courseNameBySlug = new Map((courseResult.data ?? []).map((row) => [row.slug, row.name]))
+      const amountById = new Map((installmentRows ?? []).map((row) => [row.id, Number(row.amount)]))
+      const courseNameBySlug = new Map((courseResult.data ?? []).map((row) => [row.slug, row.short_name || row.name]))
 
-      setPayments((paymentRows ?? []).map((p) => ({
-        id: p.id,
-        date: p.payment_date,
-        amount: p.amount,
-        mode: p.method,
-        status: p.status,
-        for: p.description ?? "",
-        course: p.course_slug ? courseNameBySlug.get(p.course_slug) ?? p.course_slug : "",
-        installment: p.installment_id ? labelById.get(p.installment_id) ?? "" : "",
-      })))
+      setPayments((paymentRows ?? []).map((p) => {
+        const installmentAmount = p.installment_id
+          ? amountById.get(p.installment_id)
+          : undefined
+        return {
+          id: p.id,
+          date: p.payment_date,
+          amount: p.amount,
+          mode: p.method,
+          status: p.status,
+          for: p.description ?? "",
+          course: p.course_slug ? courseNameBySlug.get(p.course_slug) ?? p.course_slug : "",
+          installment: p.installment_id ? labelById.get(p.installment_id) ?? "" : "",
+          remainingBalance: p.installment_id && installmentAmount !== undefined
+            ? getRemainingInstallmentBalance(
+                installmentAmount,
+                paymentTotals.get(p.installment_id)
+              )
+            : null,
+        }
+      }))
 
       setLoading(false)
     }
@@ -135,7 +161,7 @@ export default function StudentPaymentsPage() {
     return <div className="flex items-center justify-center py-12"><Loader2 className="size-6 animate-spin text-muted-foreground" /></div>
   }
 
-  const pendingFee = totalFee - paidAmount
+  const pendingFee = Math.max(0, totalFee - paidAmount - awaitingAmount)
 
   return (
     <div className="space-y-4">
@@ -145,7 +171,7 @@ export default function StudentPaymentsPage() {
         </Card>
       )}
 
-      <div className="grid grid-cols-2 gap-3 sm:gap-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4">
         <Card>
           <CardContent className="p-3 sm:p-4">
             <p className="text-[11px] sm:text-xs text-muted-foreground mb-1">Total Paid</p>
@@ -154,8 +180,14 @@ export default function StudentPaymentsPage() {
         </Card>
         <Card>
           <CardContent className="p-3 sm:p-4">
-            <p className="text-[11px] sm:text-xs text-muted-foreground mb-1">Pending</p>
+            <p className="text-[11px] sm:text-xs text-muted-foreground mb-1">Still due</p>
             <p className="text-xl sm:text-2xl font-bold text-amber-600">₹{pendingFee.toLocaleString()}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-3 sm:p-4">
+            <p className="text-[11px] sm:text-xs text-muted-foreground mb-1">Awaiting verification</p>
+            <p className="text-xl sm:text-2xl font-bold text-amber-600">₹{awaitingAmount.toLocaleString()}</p>
           </CardContent>
         </Card>
       </div>
@@ -193,7 +225,14 @@ export default function StudentPaymentsPage() {
                   </TableCell>
                   <TableCell className="hidden sm:table-cell text-muted-foreground">{p.date}</TableCell>
                   <TableCell className="hidden sm:table-cell text-muted-foreground">{p.mode}</TableCell>
-                  <TableCell className="font-medium">₹{p.amount.toLocaleString()}</TableCell>
+                  <TableCell className="font-medium">
+                    ₹{p.amount.toLocaleString()}
+                    {p.remainingBalance !== null && (
+                      <span className="block whitespace-nowrap text-[11px] font-normal text-muted-foreground">
+                        ₹{p.remainingBalance.toLocaleString()} still due on this installment
+                      </span>
+                    )}
+                  </TableCell>
                   <TableCell>
                     <Badge variant="secondary" className={cn("text-[10px]", statusClassName(p.status))}>
                       {paymentStatusLabel(p.status)}

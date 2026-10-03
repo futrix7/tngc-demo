@@ -16,6 +16,9 @@ interface Installment {
   amount: number
   paidAmount: number
   balance: number
+  remainingBalance: number
+  pendingClaimAmount: number
+  awaitingVerification: boolean
   dueDate: string
   paidDate: string | null
   status: "Paid" | "Pending" | "Partial"
@@ -31,6 +34,7 @@ export default function StudentFeePage() {
   const student = useStudent()
   const [totalFee, setTotalFee] = useState(0)
   const [paidAmount, setPaidAmount] = useState(0)
+  const [awaitingAmount, setAwaitingAmount] = useState(0)
   const [installments, setInstallments] = useState<Installment[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
@@ -53,6 +57,7 @@ export default function StudentFeePage() {
     const currentFees = feesRows ?? []
     setTotalFee(currentFees.reduce((sum, fee) => sum + Number(fee.total_fee ?? 0), 0))
     setInstallments([])
+    setAwaitingAmount(0)
 
     if (currentFees.length > 0) {
       const feeIds = currentFees.map((fee) => fee.id)
@@ -62,8 +67,8 @@ export default function StudentFeePage() {
           .from("fee_installments").select("id, label, amount, due_date, paid_date, status, fee_id")
           .in("fee_id", feeIds).order("due_date", { ascending: true }),
         courseSlugs.length
-          ? supabase.from("courses").select("slug, name").in("slug", courseSlugs)
-          : Promise.resolve({ data: [] as { slug: string; name: string }[], error: null }),
+          ? supabase.from("courses").select("slug, name, short_name").in("slug", courseSlugs)
+          : Promise.resolve({ data: [] as { slug: string; name: string; short_name: string }[], error: null }),
       ])
 
       if (instResult.error || coursesResult.error) {
@@ -85,7 +90,7 @@ export default function StudentFeePage() {
         .from("payments")
         .select("installment_id, amount, status")
         .eq("student_id", student.id)
-        .eq("status", "Paid")
+        .in("status", ["Paid", "Pending"])
 
       if (paymentsError) {
         console.error("[student fee] payment lookup failed:", paymentsError.message)
@@ -95,18 +100,31 @@ export default function StudentFeePage() {
       }
 
       const paidBy: Record<string, number> = {}
+      const pendingBy: Record<string, number> = {}
       for (const payment of payRows ?? []) {
         if (!payment.installment_id) continue
-        paidBy[payment.installment_id] = (paidBy[payment.installment_id] ?? 0) + Number(payment.amount)
+        if (payment.status === "Paid") {
+          paidBy[payment.installment_id] = (paidBy[payment.installment_id] ?? 0) + Number(payment.amount)
+        } else {
+          pendingBy[payment.installment_id] = (pendingBy[payment.installment_id] ?? 0) + Number(payment.amount)
+        }
       }
-      setPaidAmount((payRows ?? []).reduce((sum, payment) => sum + Number(payment.amount), 0))
+      setPaidAmount((payRows ?? [])
+        .filter((payment) => payment.status === "Paid")
+        .reduce((sum, payment) => sum + Number(payment.amount), 0))
+      const claimedAmount = (payRows ?? [])
+        .filter((payment) => payment.status === "Pending")
+        .reduce((sum, payment) => sum + Number(payment.amount), 0)
+      setAwaitingAmount(claimedAmount)
 
       const slugByFee = new Map(feesRows.map((f) => [f.id, f.course_slug]))
-      const nameBySlug = new Map((coursesResult.data ?? []).map((c) => [c.slug, c.name]))
+      const nameBySlug = new Map((coursesResult.data ?? []).map((c) => [c.slug, c.short_name || c.name]))
 
       setInstallments(instRows.map((row) => {
         const amount = Number(row.amount)
         const linePaid = Math.min(amount, paidBy[row.id] ?? 0)
+        const balance = Math.max(0, Number((amount - linePaid).toFixed(2)))
+        const pendingClaimAmount = Math.min(balance, pendingBy[row.id] ?? 0)
         const slug = slugByFee.get(row.fee_id) ?? ""
         return {
           id: row.id,
@@ -114,7 +132,10 @@ export default function StudentFeePage() {
           course: nameBySlug.get(slug) ?? slug ?? "Course",
           amount,
           paidAmount: linePaid,
-          balance: Math.max(0, Number((amount - linePaid).toFixed(2))),
+          balance,
+          remainingBalance: Math.max(0, Number((balance - pendingClaimAmount).toFixed(2))),
+          pendingClaimAmount,
+          awaitingVerification: pendingClaimAmount > 0,
           dueDate: row.due_date,
           paidDate: row.paid_date,
           status: linePaid >= amount ? "Paid" : linePaid > 0 ? "Partial" : "Pending",
@@ -136,7 +157,7 @@ export default function StudentFeePage() {
     return <div className="flex items-center justify-center py-12"><Loader2 className="size-6 animate-spin text-muted-foreground" /></div>
   }
 
-  const pendingFee = totalFee - paidAmount
+  const pendingFee = Math.max(0, totalFee - paidAmount - awaitingAmount)
   const paidPct = totalFee > 0 ? Math.round((paidAmount / totalFee) * 100) : 0
 
   const now = new Date()
@@ -178,8 +199,13 @@ export default function StudentFeePage() {
           <Progress value={paidPct} className="h-2 sm:h-2.5 mb-1.5 sm:mb-2" />
           <div className="flex justify-between text-xs sm:text-sm">
             <span className="text-muted-foreground">{paidPct}% paid</span>
-            <span className="text-amber-600 font-medium">₹{pendingFee.toLocaleString()} remaining</span>
+            <span className="text-amber-600 font-medium">₹{pendingFee.toLocaleString()} still due</span>
           </div>
+          {awaitingAmount > 0 && (
+            <p className="mt-1 text-right text-[11px] text-muted-foreground">
+              ₹{awaitingAmount.toLocaleString()} awaiting verification
+            </p>
+          )}
         </CardContent>
       </Card>
 
@@ -191,7 +217,7 @@ export default function StudentFeePage() {
               <div key={course} className="space-y-2.5">
                 <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{course}</p>
                 {rows.map((inst) => {
-                  const overdue = inst.balance > 0 && inst.dueDate < todayIso
+                  const overdue = inst.remainingBalance > 0 && inst.dueDate < todayIso
                   return (
                     <div key={inst.id} className="flex flex-col gap-3 rounded-lg border border-border p-2.5 sm:flex-row sm:items-center sm:justify-between sm:p-3">
                       <div className="flex items-center gap-2 sm:gap-2.5 min-w-0 flex-1">
@@ -216,14 +242,22 @@ export default function StudentFeePage() {
                             was how a part payment came to look unpaid. */}
                         <div className="text-right">
                           <p className="text-xs font-bold sm:text-sm">
-                            ₹{(inst.balance > 0 ? inst.balance : inst.amount).toLocaleString()}
+                            ₹{inst.remainingBalance.toLocaleString()} still due
                           </p>
-                          {inst.balance > 0 && inst.paidAmount > 0 && (
-                            <p className="text-[11px] text-muted-foreground">of ₹{inst.amount.toLocaleString()}</p>
+                          {(inst.balance < inst.amount || inst.pendingClaimAmount > 0) && (
+                            <p className="text-[11px] text-muted-foreground">
+                              {inst.paidAmount > 0 && `₹${inst.paidAmount.toLocaleString()} paid`}
+                              {inst.paidAmount > 0 && inst.pendingClaimAmount > 0 && " · "}
+                              {inst.pendingClaimAmount > 0 &&
+                                `₹${inst.pendingClaimAmount.toLocaleString()} awaiting verification`}
+                            </p>
                           )}
                         </div>
-                        <Badge variant="secondary" className={cn("shrink-0 text-[10px]", statusStyles[inst.status])}>
-                          {inst.status}
+                        <Badge variant="secondary" className={cn(
+                          "shrink-0 text-[10px]",
+                          inst.awaitingVerification ? "bg-amber-500/15 text-amber-600" : statusStyles[inst.status]
+                        )}>
+                          {inst.awaitingVerification ? "Awaiting review" : inst.status}
                         </Badge>
                       </div>
                     </div>

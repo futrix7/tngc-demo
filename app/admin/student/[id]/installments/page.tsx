@@ -54,6 +54,7 @@ interface Installment {
   amount: number
   paidAmount: number
   balance: number
+  remainingBalance: number
   dueDate: string
   paidDate: string | null
   status: "Paid" | "Pending" | "Partial"
@@ -130,8 +131,8 @@ export default function StudentInstallmentsPage() {
           .from("fee_installments").select("id, label, amount, due_date, paid_date, status, fee_id")
           .in("fee_id", feeIds).order("due_date", { ascending: true }),
         courseSlugs.length
-          ? supabase.from("courses").select("slug, name").in("slug", courseSlugs)
-          : Promise.resolve({ data: [] as { slug: string; name: string }[], error: null }),
+          ? supabase.from("courses").select("slug, name, short_name").in("slug", courseSlugs)
+          : Promise.resolve({ data: [] as { slug: string; name: string; short_name: string }[], error: null }),
       ])
 
       if (instResult.error || coursesResult.error) {
@@ -205,7 +206,7 @@ export default function StudentInstallmentsPage() {
       }
 
       const slugByFee = new Map(currentFees.map((fee) => [fee.id, fee.course_slug]))
-      const nameBySlug = new Map((coursesResult.data ?? []).map((c) => [c.slug, c.name]))
+      const nameBySlug = new Map((coursesResult.data ?? []).map((c) => [c.slug, c.short_name || c.name]))
 
       setInstallments(instRows.map((row) => {
         const amount = Number(row.amount)
@@ -218,6 +219,10 @@ export default function StudentInstallmentsPage() {
           amount,
           paidAmount,
           balance: Math.max(0, Number((amount - paidAmount).toFixed(2))),
+          remainingBalance: Math.max(
+            0,
+            Number((amount - paidAmount - Math.min(amount - paidAmount, claim?.amount ?? 0)).toFixed(2))
+          ),
           dueDate: row.due_date,
           paidDate: row.paid_date,
           status: paidAmount >= amount ? "Paid" : paidAmount > 0 ? "Partial" : "Pending",
@@ -225,7 +230,9 @@ export default function StudentInstallmentsPage() {
           pendingPaymentIds: claim?.ids ?? [],
           pendingClaimAmount: claim?.amount ?? 0,
           pendingReference: claim?.reference ?? "",
-          availableToSplit: Math.max(0, Number((amount - paidAmount - (claim?.amount ?? 0)).toFixed(2))),
+          availableToSplit: claim?.ids.length
+            ? 0
+            : Math.max(0, Number((amount - paidAmount).toFixed(2))),
         }
       }))
     }
@@ -344,10 +351,11 @@ export default function StudentInstallmentsPage() {
   const today = new Date()
   const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`
   const open = installments.filter((i) => i.balance > 0)
-  const overdue = open.filter((i) => i.dueDate < todayIso)
+  const overdue = open.filter((i) => i.remainingBalance > 0 && i.dueDate < todayIso)
   const paid = installments.filter((i) => i.balance === 0)
   const awaiting = installments.filter((i) => i.pendingPaymentIds.length > 0)
-  const pendingAmount = totalFee - collected
+  const awaitingAmount = installments.reduce((sum, installment) => sum + installment.pendingClaimAmount, 0)
+  const pendingAmount = Math.max(0, totalFee - collected - awaitingAmount)
   const collectAllAmount = Number(
     installments.reduce((sum, installment) => sum + installment.availableToSplit, 0).toFixed(2)
   )
@@ -624,10 +632,12 @@ export default function StudentInstallmentsPage() {
                       </div>
                       <div className="flex min-w-0 flex-wrap items-center justify-between gap-3 sm:shrink-0 sm:justify-end">
                         <div className="text-right">
-                          <p className="text-sm font-bold">₹{inst.balance.toLocaleString()}</p>
-                          {inst.paidAmount > 0 && (
+                          <p className="text-sm font-bold">₹{inst.remainingBalance.toLocaleString()} still due</p>
+                          {(inst.paidAmount > 0 || inst.pendingClaimAmount > 0) && (
                             <p className="text-[11px] text-muted-foreground">
-                              of ₹{inst.amount.toLocaleString()}
+                              ₹{inst.paidAmount.toLocaleString()} paid
+                              {inst.pendingClaimAmount > 0 &&
+                                ` · ₹${inst.pendingClaimAmount.toLocaleString()} awaiting verification`}
                             </p>
                           )}
                         </div>

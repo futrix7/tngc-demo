@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react"
 import { BookOpen, Check, ChevronDown, Search, UserPlus } from "lucide-react"
 import { FormSheet, FormField, SHEET_INPUT_CLASS, SHEET_NATIVE_SELECT_CLASS } from "@/components/admin/form-sheet"
-import { AmountSplit, MAX_SPLIT_PARTS, readAmountParts, sumAmountParts } from "@/components/shared/amount-split"
 import { PasswordVisibilityToggle } from "@/components/auth/password-visibility-toggle"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -29,18 +28,12 @@ export function AddStudentSheet({ open, onOpenChange, onSuccess }: AddStudentShe
   const [fullName, setFullName] = useState("")
   const [email, setEmail] = useState("")
   const [phone, setPhone] = useState("")
-  const [alternatePhone, setAlternatePhone] = useState("")
   const [fatherName, setFatherName] = useState("")
   const [fatherPhone, setFatherPhone] = useState("")
   const [course, setCourse] = useState("")
   const [courseDialogOpen, setCourseDialogOpen] = useState(false)
   const [courseSearch, setCourseSearch] = useState("")
   const [totalFee, setTotalFee] = useState("")
-  // One split and one figure. The schedule is how the fee is divided up; what is
-  // handed over on day one is a single amount, because "the student paid 2,000
-  // of 5,000" is one fact and never three. Blank schedule boxes mean the whole
-  // fee is a single line they can pay any part of later.
-  const [installmentAmounts, setInstallmentAmounts] = useState<string[]>([""])
   const [amountPaidNow, setAmountPaidNow] = useState("")
   const [paymentMethod, setPaymentMethod] = useState("cash")
   const [paymentReference, setPaymentReference] = useState("")
@@ -76,12 +69,10 @@ export function AddStudentSheet({ open, onOpenChange, onSuccess }: AddStudentShe
     setFullName("")
     setEmail("")
     setPhone("")
-    setAlternatePhone("")
     setFatherName("")
     setFatherPhone("")
     setCourse("")
     setTotalFee("")
-    setInstallmentAmounts([""])
     setAmountPaidNow("")
     setPaymentMethod("cash")
     setPaymentReference("")
@@ -95,34 +86,10 @@ export function AddStudentSheet({ open, onOpenChange, onSuccess }: AddStudentShe
       toast("Please fill in all required fields", { variant: "destructive" })
       return
     }
-    if (alternatePhone && !/^\d{10}$/.test(alternatePhone)) {
-      toast("Enter a valid 10-digit alternate phone number.", { variant: "destructive" })
-      return
-    }
-
     const fee = Number(totalFee)
 
-    const schedule = readAmountParts(installmentAmounts)
-    if (schedule.error) {
-      toast(schedule.error, { variant: "destructive" })
-      return
-    }
-
-    if (schedule.amounts.length > 0) {
-      const sum = Number(sumAmountParts(installmentAmounts).toFixed(2))
-      if (Math.abs(sum - fee) > 0.005) {
-        toast(
-          `The installments must add up to ₹${fee.toLocaleString("en-IN")}. They add up to ₹${sum.toLocaleString("en-IN")}.`,
-          { variant: "destructive" }
-        )
-        return
-      }
-    }
-
-    // A single figure for what is being handed over, and it can be any figure up
-    // to the fee. There is no second set of boxes to keep in step with the
-    // schedule: paying 2,000 of a 5,000 fee is one number, and the schedule is a
-    // plan for when the rest arrives, not a set of instructions for this form.
+    // Registration creates one schedule line for the full fee. Any opening
+    // payment is recorded against that line as Installment 1.
     const parsedPayment = parsePaymentAmount(amountPaidNow.trim() || null)
     const amountPaid = parsedPayment.amount ?? 0
     if (parsedPayment.error) {
@@ -153,12 +120,10 @@ export function AddStudentSheet({ open, onOpenChange, onSuccess }: AddStudentShe
           fullName,
           email,
           phone,
-          alternatePhone,
           fatherName,
           fatherPhone,
           courseSlug: course,
           totalFee: fee,
-          installmentAmounts: schedule.amounts.length > 0 ? schedule.amounts : null,
           paymentAmount: amountPaid > 0 ? amountPaid : null,
           paymentMethod,
           paymentReference,
@@ -242,23 +207,10 @@ export function AddStudentSheet({ open, onOpenChange, onSuccess }: AddStudentShe
         <FormField label="Father / Guardian Name" htmlFor="fatherName">
           <Input id="fatherName" placeholder="Enter name" className={SHEET_INPUT_CLASS} value={fatherName} onChange={(e) => setFatherName(e.target.value)} />
         </FormField>
-        <FormField label="Father / Guardian Phone" htmlFor="fatherPhone">
-          <Input id="fatherPhone" type="tel" inputMode="numeric" maxLength={10} placeholder="10-digit phone number" className={SHEET_INPUT_CLASS} value={fatherPhone} onChange={(e) => setFatherPhone(e.target.value)} />
+        <FormField label="Father / Guardian Phone (optional)" htmlFor="fatherPhone">
+          <Input id="fatherPhone" type="tel" inputMode="numeric" maxLength={10} placeholder="10-digit phone number (optional)" className={SHEET_INPUT_CLASS} value={fatherPhone} onChange={(e) => setFatherPhone(e.target.value.replace(/\D/g, "").slice(0, 10))} />
         </FormField>
       </div>
-
-      <FormField label="Alternate Phone (optional)" htmlFor="alternatePhone">
-        <Input
-          id="alternatePhone"
-          type="tel"
-          inputMode="numeric"
-          maxLength={10}
-          placeholder="10-digit alternate phone number"
-          className={SHEET_INPUT_CLASS}
-          value={alternatePhone}
-          onChange={(event) => setAlternatePhone(event.target.value.replace(/\D/g, "").slice(0, 10))}
-        />
-      </FormField>
 
       <FormField label="Course">
         <Button
@@ -307,7 +259,6 @@ export function AddStudentSheet({ open, onOpenChange, onSuccess }: AddStudentShe
                   onClick={() => {
                     setCourse(item.slug)
                     setTotalFee(item.fee_numeric ? String(item.fee_numeric) : "")
-                    setInstallmentAmounts([""])
                     setAmountPaidNow("")
                     setPaymentMethod("cash")
                     setPaymentReference("")
@@ -341,18 +292,12 @@ export function AddStudentSheet({ open, onOpenChange, onSuccess }: AddStudentShe
         </div>
       </div>
 
-      <AmountSplit
-        values={installmentAmounts}
-        onChange={setInstallmentAmounts}
-        label="Installments"
-        target={totalCourseFee > 0 ? totalCourseFee : null}
-        partLabels={Array.from({ length: Math.max(installmentAmounts.length, 1) }, (_, i) => `Installment ${i + 1}`)}
-        hint={`Your own amounts, up to ${MAX_SPLIT_PARTS}. Nothing is divided for you — leave every box blank and the whole fee becomes one line the student can pay any part of, whenever they like.`}
-      />
+      <p className="text-xs text-muted-foreground">
+        The course fee will be scheduled as one line: Installment 1. Any amount paid now is
+        applied to it, and the remaining balance stays due.
+      </p>
 
-      {/* One number, not another set of boxes. The schedule above is a plan for
-          the fee; this is what is physically in the hand today. */}
-      <FormField label="Amount being paid now" htmlFor="amountPaidNow">
+      <FormField label="Custom amount paid now (Installment 1)" htmlFor="amountPaidNow">
         <div className="flex gap-2">
           <Input
             id="amountPaidNow"

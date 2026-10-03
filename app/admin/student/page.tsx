@@ -81,7 +81,7 @@ export default function AdminStudentsPage() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [courseFilter, setCourseFilter] = useState("all");
-  const [courses, setCourses] = useState<{ slug: string; name: string }[]>([]);
+  const [courses, setCourses] = useState<{ slug: string; name: string; short_name: string }[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
   const [addOpen, setAddOpen] = useState(false);
@@ -134,10 +134,10 @@ export default function AdminStudentsPage() {
     if (courseSlugs.length > 0) {
       const { data: coursesData } = await supabase
         .from("courses")
-        .select("slug, name")
+        .select("slug, name, short_name")
         .in("slug", courseSlugs);
       if (coursesData) {
-        coursesMap = Object.fromEntries(coursesData.map((c) => [c.slug, c.name]));
+        coursesMap = Object.fromEntries(coursesData.map((c) => [c.slug, c.short_name || c.name]));
       }
     }
 
@@ -183,7 +183,7 @@ export default function AdminStudentsPage() {
   useEffect(() => {
     async function fetchDirectoryStats() {
       const [coursesResult, totalResult, activeResult, pendingResult, inactiveResult] = await Promise.all([
-        supabase.from("courses").select("slug, name").order("name"),
+        supabase.from("courses").select("slug, name, short_name").order("name"),
         supabase.from("students").select("id", { count: "exact", head: true })
           .eq("is_legacy_import", false).neq("status", "Inactive"),
         supabase.from("students").select("id", { count: "exact", head: true }).eq("is_legacy_import", false).eq("status", "Active"),
@@ -222,7 +222,7 @@ export default function AdminStudentsPage() {
       defaultValue: "all",
       options: [
         { value: "all", label: "All courses" },
-        ...courses.map((course) => ({ value: course.slug, label: course.name })),
+        ...courses.map((course) => ({ value: course.slug, label: course.short_name || course.name })),
       ],
     },
   ];
@@ -279,7 +279,10 @@ export default function AdminStudentsPage() {
         row.full_name,
         row.email,
         row.phone,
-        courses.find((item) => item.slug === row.course_slug)?.name ?? row.course_slug ?? "",
+        courses.find((item) => item.slug === row.course_slug)?.short_name
+          || courses.find((item) => item.slug === row.course_slug)?.name
+          || row.course_slug
+          || "",
         branchNames.get(row.branch_id ?? "") ?? "",
         row.enrollment_date ?? "",
         row.status,

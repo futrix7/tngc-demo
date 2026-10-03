@@ -151,7 +151,6 @@ export interface Database {
           father_name: string | null
           father_phone: string | null
           mother_name: string | null
-          alternate_phone: string | null
           profile_photo: string | null
           is_legacy_import: boolean
           legacy_original_id: string | null
@@ -178,7 +177,6 @@ export interface Database {
           father_name?: string | null
           father_phone?: string | null
           mother_name?: string | null
-          alternate_phone?: string | null
           profile_photo?: string | null
           is_legacy_import?: boolean
           legacy_original_id?: string | null
@@ -205,7 +203,6 @@ export interface Database {
           father_name?: string | null
           father_phone?: string | null
           mother_name?: string | null
-          alternate_phone?: string | null
           profile_photo?: string | null
           is_legacy_import?: boolean
           legacy_original_id?: string | null
@@ -872,14 +869,12 @@ export interface Database {
           p_email: string
           p_phone: string
           p_father_name: string
-          p_father_phone: string
+          p_father_phone: string | null
           p_course_slugs: string[]
           p_present_status: string
           p_signature: string
           p_payment_method: string
           p_payment_description: string
-          /** At most 3 amounts of the caller's own, adding up to the course fee. */
-          p_installment_amounts?: number[] | null
           /** One figure of the caller's own, up to the fee. Never split. */
           p_payment_amount?: number | null
           p_total_fee_override?: number | null

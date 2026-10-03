@@ -20,7 +20,7 @@ type Payment = Database["public"]["Tables"]["payments"]["Row"];
 type Transaction = Database["public"]["Tables"]["transactions"]["Row"];
 type Branch = Database["public"]["Tables"]["branches"]["Row"];
 
-const TABS = ["This Month", "This Quarter", "This Year"] as const;
+const TABS = ["All Dates", "This Month", "This Quarter", "This Year"] as const;
 
 /**
  * Nothing selected.
@@ -121,6 +121,8 @@ function startOfDay(date: Date) {
 }
 
 function tabRange(tab: string): AnalyticsRange {
+  if (tab === "All Dates") return OPEN_RANGE;
+
   const now = new Date();
   const to = endOfDay(now);
 
@@ -354,7 +356,7 @@ function computeTopCourses(students: Student[], courses: Course[]) {
   return courses
     .map((c) => ({
       slug: c.slug,
-      name: c.name,
+      name: c.short_name || c.name,
       enrollments: courseCountMap[c.slug] || 0,
       completionRate: c.completion_rate,
       revenue: "₹" + ((courseCountMap[c.slug] || 0) * c.fee_numeric).toLocaleString("en-IN"),
@@ -413,7 +415,7 @@ function computeEnrollmentPie(students: Student[], courses: Course[]) {
 }
 
 export default function AnalyticsPage() {
-  const [activeTab, setActiveTab] = useState<string>("This Month");
+  const [activeTab, setActiveTab] = useState<string>("All Dates");
   const [exportOpen, setExportOpen] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -464,7 +466,7 @@ export default function AnalyticsPage() {
         defaultValue: "",
         options: [
           { label: "All courses", value: "" },
-          ...courses.map((c) => ({ label: c.name, value: c.slug })),
+          ...courses.map((c) => ({ label: c.short_name || c.name, value: c.slug })),
         ],
       },
       {
@@ -620,6 +622,7 @@ export default function AnalyticsPage() {
   const totalPayments = scopedPayments.length;
 
   const hasCustomFilter = Object.entries(filters).some(([key, value]) => value !== DEFAULT_FILTERS[key]);
+  const hasCustomDateRange = Boolean(filters.from || filters.to);
   const rangeSummary = describeRange(range);
 
   const overallGrowth = totalStudents > 0 ? `+${Math.round((totalEnrollments / totalStudents) * 100)}%` : "+0%";
@@ -673,12 +676,13 @@ export default function AnalyticsPage() {
           {TABS.map((tab) => (
             <button
               key={tab}
-              onClick={() => setActiveTab(tab)}
+              onClick={() => {
+                setFilters((current) => ({ ...current, from: "", to: "" }));
+                setActiveTab(tab);
+              }}
               className={cn(
                 "rounded-md px-3 py-1.5 text-xs font-medium transition-all",
-                // A custom date range overrides the tabs, so leaving one lit
-                // would claim a window the charts are no longer showing.
-                !hasCustomFilter && activeTab === tab
+                !hasCustomDateRange && activeTab === tab
                   ? "bg-background text-foreground shadow-sm"
                   : "text-muted-foreground hover:text-foreground"
               )}
@@ -693,8 +697,14 @@ export default function AnalyticsPage() {
           triggerLabel="More filters"
           fields={filterFields}
           values={filters}
-          onApply={async (values) => setFilters(values)}
-          onClear={async (values) => setFilters(values)}
+          onApply={async (values) => {
+            setFilters(values);
+            if (!values.from && !values.to) setActiveTab("All Dates");
+          }}
+          onClear={async (values) => {
+            setFilters(values);
+            setActiveTab("All Dates");
+          }}
         />
       </div>
 

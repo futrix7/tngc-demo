@@ -224,7 +224,6 @@ CREATE TABLE IF NOT EXISTS students (
   father_name             TEXT,
   father_phone            TEXT,
   mother_name             TEXT,
-  alternate_phone         TEXT,
   profile_photo           TEXT,
   present_status          TEXT,
   full_name_as_signature  TEXT,
@@ -465,6 +464,8 @@ COMMENT ON TABLE public.rate_limit_log IS
 
 ALTER TABLE students ADD COLUMN IF NOT EXISTS present_status         TEXT;
 ALTER TABLE students ADD COLUMN IF NOT EXISTS full_name_as_signature TEXT;
+ALTER TABLE students ALTER COLUMN father_phone DROP NOT NULL;
+ALTER TABLE students DROP COLUMN IF EXISTS alternate_phone;
 
 -- branch_id was added to these tables after they were first created, and the
 -- screens that read it (student directory, installments, finance breakdown,
@@ -934,6 +935,16 @@ DROP FUNCTION IF EXISTS public.register_student(
   numeric[], numeric, numeric
 );
 
+DROP FUNCTION IF EXISTS public.register_student(
+  uuid, text, text, text, text, text, text[], text, text, text, text,
+  numeric[], numeric, numeric, text
+);
+
+DROP FUNCTION IF EXISTS public.register_student(
+  uuid, text, text, text, text, text, text[], text, text, text, text,
+  numeric, numeric
+);
+
 CREATE OR REPLACE FUNCTION public.register_student(
   p_user_id uuid,
   p_full_name text,
@@ -946,10 +957,8 @@ CREATE OR REPLACE FUNCTION public.register_student(
   p_signature text,
   p_payment_method text,
   p_payment_description text,
-  p_installment_amounts numeric[] DEFAULT NULL,
   p_payment_amount numeric DEFAULT NULL,
-  p_total_fee_override numeric DEFAULT NULL,
-  p_alternate_phone text DEFAULT NULL
+  p_total_fee_override numeric DEFAULT NULL
 )
 RETURNS TABLE (student_id text, payment_id text, total_fee numeric)
 LANGUAGE plpgsql
@@ -986,23 +995,16 @@ BEGIN
     RAISE EXCEPTION 'signature does not match the enrolled name' USING ERRCODE = '22023';
   END IF;
 
-  -- A split can be short, uneven, or not used at all, but never long: three is
-  -- the ceiling the institute works to and the one every screen states.
-  IF p_installment_amounts IS NOT NULL
-     AND array_length(p_installment_amounts, 1) > 3 THEN
-    RAISE EXCEPTION 'a fee can be split into at most 3 installments' USING ERRCODE = '22023';
-  END IF;
-
   v_primary_course := p_course_slugs[1];
   v_student_id := public.next_student_code(v_year);
   v_payment_id := public.next_payment_code(v_year);
 
   INSERT INTO students (
-    id, user_id, full_name, email, phone, father_name, father_phone, alternate_phone,
+    id, user_id, full_name, email, phone, father_name, father_phone,
     course_slug, status, present_status, full_name_as_signature
   ) VALUES (
     v_student_id, p_user_id, p_full_name, p_email, p_phone, p_father_name,
-    NULLIF(p_father_phone, ''), NULLIF(p_alternate_phone, ''), v_primary_course,
+    NULLIF(p_father_phone, ''), v_primary_course,
     'Active', p_present_status, p_signature
   );
 
@@ -1019,8 +1021,8 @@ BEGIN
     VALUES (v_student_id, v_course, v_course_fee, 0, v_course_fee)
     RETURNING id INTO v_fee_row;
 
-    -- The caller's own amounts, or a single line for the whole fee.
-    PERFORM * FROM public.create_fee_schedule(v_fee_row, p_installment_amounts, v_today);
+    -- Registration always starts with one line for the full course fee.
+    PERFORM * FROM public.create_fee_schedule(v_fee_row, NULL::numeric[], v_today);
   END LOOP;
 
   IF p_payment_amount IS NOT NULL AND p_payment_amount > 0 THEN
@@ -1060,23 +1062,23 @@ $$;
 
 COMMENT ON FUNCTION public.register_student(
   uuid, text, text, text, text, text, text[], text, text, text, text,
-  numeric[], numeric, numeric, text
+  numeric, numeric
 ) IS
-  'Creates a student, fee rows and schedules, and an optional Pending claim for a single amount handed over on day one. The schedule is at most 3 amounts of the caller''s own choosing; the payment is one figure of their own. Supports an admin-set total fee override for one course. service_role only.';
+  'Creates a student, fee rows and a single Installment 1 schedule for each course, and an optional Pending payment claim applied to Installment 1. Supports an admin-set total fee override for one course. service_role only.';
 
 REVOKE ALL ON FUNCTION public.register_student(
   uuid, text, text, text, text, text, text[], text, text, text, text,
-  numeric[], numeric, numeric, text
+  numeric, numeric
 ) FROM PUBLIC;
 
 GRANT EXECUTE ON FUNCTION public.register_student(
   uuid, text, text, text, text, text, text[], text, text, text, text,
-  numeric[], numeric, numeric, text
+  numeric, numeric
 ) TO service_role;
 
 ALTER FUNCTION public.register_student(
   uuid, text, text, text, text, text, text[], text, text, text, text,
-  numeric[], numeric, numeric, text
+  numeric, numeric
 ) OWNER TO postgres;
 
 DROP FUNCTION IF EXISTS public.enroll_student_in_course(uuid, text);

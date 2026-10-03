@@ -3,8 +3,6 @@ import { authenticateAdminRequest, isSupabaseAdminConfigured, supabaseAdmin } fr
 import { normalizeIndianPhone } from "@/lib/phone"
 import {
   checkAmountAgainstTotal,
-  checkAmountSplitAgainst,
-  parseAmountSplit,
   parsePaymentAmount,
 } from "@/lib/amount-split"
 
@@ -66,15 +64,12 @@ export async function POST(request: Request) {
   const fullName = text(body.fullName)
   const phone = text(body.phone)
   const normalizedPhone = normalizeIndianPhone(phone)
-  const alternatePhone = text(body.alternatePhone)
   const fatherName = text(body.fatherName)
   const fatherPhone = text(body.fatherPhone)
   const courseSlug = text(body.courseSlug)
   const totalFee = Number(body.totalFee)
-  // One split, one figure. The first breaks the fee into the schedule the student
-  // will see; the second is a single number for what is physically in the hand
-  // today. Neither is worked out for the administrator — see lib/amount-split.ts.
-  const installmentSplit = parseAmountSplit(body.installmentAmounts)
+  // Registration creates one schedule line for the full fee; this is the amount
+  // collected against Installment 1 at registration.
   const paidNow = parsePaymentAmount(body.paymentAmount)
   const paymentMethod = text(body.paymentMethod).toLowerCase() || "cash"
   const paymentReference = text(body.paymentReference)
@@ -86,17 +81,12 @@ export async function POST(request: Request) {
   if (email && !EMAIL_PATTERN.test(email)) return NextResponse.json({ error: "Enter a valid email address." }, { status: 400 })
   if (!fullName || !fatherName) return NextResponse.json({ error: "Student and father/guardian names are required." }, { status: 400 })
   if (!normalizedPhone) return NextResponse.json({ error: "Enter a valid 10-digit student phone number." }, { status: 400 })
-  if (alternatePhone && !/^\d{10}$/.test(alternatePhone)) return NextResponse.json({ error: "Enter a valid 10-digit alternate phone number." }, { status: 400 })
   if (password.length < 6) return NextResponse.json({ error: "The login password must be at least 6 characters." }, { status: 400 })
   if (fatherPhone && !/^\d{10}$/.test(fatherPhone)) return NextResponse.json({ error: "Enter a valid 10-digit father/guardian phone number." }, { status: 400 })
   if (!courseSlug) return NextResponse.json({ error: "Select a course." }, { status: 400 })
   if (!Number.isFinite(totalFee) || totalFee <= 0) return NextResponse.json({ error: "Enter a valid course fee." }, { status: 400 })
-  if (installmentSplit.error) return NextResponse.json({ error: installmentSplit.error }, { status: 400 })
   if (paidNow.error) return NextResponse.json({ error: paidNow.error }, { status: 400 })
   if (!/^(upi|cash|bank)$/.test(paymentMethod)) return NextResponse.json({ error: "Choose a valid payment method." }, { status: 400 })
-
-  const scheduleError = checkAmountSplitAgainst(installmentSplit.amounts, totalFee)
-  if (scheduleError) return NextResponse.json({ error: scheduleError }, { status: 400 })
 
   const paymentError = checkAmountAgainstTotal(paidNow.amount, totalFee)
   if (paymentError) return NextResponse.json({ error: paymentError }, { status: 400 })
@@ -174,16 +164,14 @@ export async function POST(request: Request) {
     p_email: email || null,
     p_phone: normalizedPhone.nationalNumber,
     p_father_name: fatherName,
-    p_father_phone: fatherPhone,
+    p_father_phone: fatherPhone || null,
     p_course_slugs: [courseSlug],
     p_present_status: "Student",
     p_signature: fullName,
     p_payment_method: paymentMethod || "cash",
     p_payment_description: paymentReference || "Student account created by administrator",
-    p_installment_amounts: installmentSplit.amounts,
     p_payment_amount: paidNow.amount,
     p_total_fee_override: totalFee,
-    p_alternate_phone: alternatePhone || null,
   })
 
   if (error) {

@@ -66,13 +66,13 @@ export async function GET(request: Request) {
       transactionsRes,
     ] = await Promise.all([
       supabaseAdmin.from("students").select("id, full_name, course_slug, branch_id, enrollment_date, status"),
-      supabaseAdmin.from("courses").select("id, slug, name, created_at, status"),
+      supabaseAdmin.from("courses").select("id, slug, name, short_name, created_at, status"),
       supabaseAdmin
         .from("payments")
-        .select("id, student_id, student_name, amount, status, method, payment_date, created_at"),
+        .select("id, student_id, student_name, amount, status, method, payment_date, created_at, installment_id"),
       supabaseAdmin.from("branches").select("id, name"),
       supabaseAdmin.from("fees").select("total_fee, paid_amount, pending_amount"),
-      supabaseAdmin.from("fee_installments").select("amount, due_date, status"),
+      supabaseAdmin.from("fee_installments").select("id, amount, due_date, status"),
       supabaseAdmin.from("transactions").select("amount, type, date"),
     ])
 
@@ -90,9 +90,31 @@ export async function GET(request: Request) {
     const fees = feesRes.data ?? []
     const installments = installmentsRes.data ?? []
     const transactions = transactionsRes.data ?? []
+    const paidByInstallment = new Map<string, number>()
+    const pendingByInstallment = new Map<string, number>()
+    for (const payment of payments) {
+      if (!payment.installment_id) continue
+      if (payment.status === "Paid") {
+        paidByInstallment.set(
+          payment.installment_id,
+          (paidByInstallment.get(payment.installment_id) ?? 0) + Number(payment.amount)
+        )
+      } else if (payment.status === "Pending") {
+        pendingByInstallment.set(
+          payment.installment_id,
+          (pendingByInstallment.get(payment.installment_id) ?? 0) + Number(payment.amount)
+        )
+      }
+    }
+    const remainingOnInstallment = (installment: (typeof installments)[number]) => {
+      if (installment.status === "Paid") return 0
+      const paid = paidByInstallment.get(installment.id) ?? 0
+      const balance = Math.max(0, Number(installment.amount) - paid)
+      return Math.max(0, balance - (pendingByInstallment.get(installment.id) ?? 0))
+    }
 
     const branchMap = new Map(branches.map((b) => [b.id, b.name]))
-    const courseMap = new Map(courses.map((c) => [c.slug, c.name]))
+    const courseMap = new Map(courses.map((c) => [c.slug, c.short_name || c.name]))
 
     // --- Stat Cards ---
     const totalStudents = students.length
@@ -139,10 +161,10 @@ export async function GET(request: Request) {
         (installment) =>
           installment.status !== "Paid" && installment.due_date >= todayStr && installment.due_date <= dueThroughStr
       )
-      .reduce((sum, installment) => sum + Number(installment.amount), 0)
+      .reduce((sum, installment) => sum + remainingOnInstallment(installment), 0)
     const overdue = installments
       .filter((installment) => installment.status !== "Paid" && dayOf(installment.due_date) < todayStr)
-      .reduce((sum, installment) => sum + Number(installment.amount), 0)
+      .reduce((sum, installment) => sum + remainingOnInstallment(installment), 0)
 
     const todayStats = {
       admissions: admissionsToday,
@@ -159,10 +181,14 @@ export async function GET(request: Request) {
     const collectedThisMonth = payments
       .filter((payment) => payment.status === "Paid" && payment.payment_date?.startsWith(monthKey))
       .reduce((sum, payment) => sum + Number(payment.amount), 0)
-    const outstanding = fees.reduce(
+    const grossOutstanding = fees.reduce(
       (sum, fee) => sum + Number(fee.pending_amount ?? Math.max(0, fee.total_fee - fee.paid_amount)),
       0
     )
+    const pendingClaimAmount = payments
+      .filter((payment) => payment.status === "Pending")
+      .reduce((sum, payment) => sum + Number(payment.amount), 0)
+    const outstanding = Math.max(0, grossOutstanding - pendingClaimAmount)
     const feeSnapshot = { collectedThisMonth, outstanding, dueSoon }
 
     // --- Daily collections (last 14 days) ---
