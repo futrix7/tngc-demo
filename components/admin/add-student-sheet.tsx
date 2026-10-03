@@ -132,7 +132,11 @@ export function AddStudentSheet({ open, onOpenChange, onSuccess }: AddStudentShe
       })
       const result = await response.json() as { error?: string; studentId?: string }
       if (!response.ok) {
-        toast(result.error ?? "Failed to add student", { variant: "destructive" })
+        const duplicatePhone = response.status === 409 && /phone/i.test(result.error ?? "")
+        toast(
+          result.error ?? "Failed to add student",
+          { variant: duplicatePhone ? "warning" : "destructive" }
+        )
         return
       }
 

@@ -176,6 +176,15 @@ export async function POST(request: Request) {
 
   if (error) {
     if (createdNewUser) await discardOrphanAccount(userId)
+    if (
+      error.code === "23505" &&
+      /phone.*already registered|already registered.*phone/i.test(error.message)
+    ) {
+      return NextResponse.json(
+        { error: "A student is already registered with this phone number." },
+        { status: 409 }
+      )
+    }
     console.error("[admin student registration] enrollment transaction failed:", error.message)
     return NextResponse.json({ error: "Could not save the student and fee schedule. No account was left behind." }, { status: 500 })
   }

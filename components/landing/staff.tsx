@@ -8,7 +8,7 @@ import { supabase } from "@/lib/supabase"
 const fallbackFaculty = [
   {
     id: "fallback-1",
-    name: "Mrs. Nadiya",
+    name: "Nadiya",
     role: "Director",
     branch: "Ramanthapur",
     qualifications: ["MBA", "Degree"],
@@ -18,6 +18,15 @@ const fallbackFaculty = [
   },
   {
     id: "fallback-2",
+    name: "Mada Eswar",
+    role: "Founder",
+    branch: "Ramanthapur",
+    qualifications: [],
+    description: null,
+    is_founder: true,
+  },
+  {
+    id: "fallback-3",
     name: "Mr G Madhavrao",
     role: "Coding Trainer",
     branch: "Ramanthapur",
@@ -26,7 +35,7 @@ const fallbackFaculty = [
     is_founder: false,
   },
   {
-    id: "fallback-3",
+    id: "fallback-4",
     name: "Mr M Harish Kumar",
     role: "Computer Trainer",
     branch: "Ramanthapur",
@@ -129,12 +138,22 @@ export function Staff() {
           return
         }
 
-        const rows = uniqueFaculty(data as FacultyRow[])
+        const rows = uniqueFaculty(data as FacultyRow[]).map((faculty) => {
+          if (/nadiya/i.test(faculty.name)) {
+            return { ...faculty, role: "Director", is_founder: false }
+          }
+          if (/mada.*eswar|eswar.*mada/i.test(faculty.name)) {
+            return { ...faculty, role: "Founder", is_founder: true }
+          }
+          return faculty
+        })
+        if (!rows.some((faculty) => /founder/i.test(faculty.role))) {
+          const founder = fallbackFaculty.find((faculty) => /founder/i.test(faculty.role))
+          if (founder) rows.push(founder)
+        }
         const preferredDirector =
-          rows.find((f) => /director/i.test(f.role) && /nadiya/i.test(f.name)) ??
-          rows.find((f) => /director/i.test(f.role)) ??
           rows.find((f) => /nadiya/i.test(f.name)) ??
-          rows.find((f) => !/founder/i.test(f.role)) ??
+          rows.find((f) => /director/i.test(f.role)) ??
           rows[0] ??
           null
 
@@ -142,9 +161,8 @@ export function Staff() {
         setMembers(
           rows.filter(
             (f) =>
-              !/director/i.test(f.role) &&
-              !/founder/i.test(f.role) &&
-              /trainer/i.test(f.role)
+              f.id !== preferredDirector?.id &&
+              (/founder/i.test(f.role) || /trainer/i.test(f.role))
           )
         )
       } catch {
@@ -156,9 +174,8 @@ export function Staff() {
 
     function applyFallback() {
       const preferredDirector =
-        fallbackFaculty.find((f) => /director/i.test(f.role) && /nadiya/i.test(f.name)) ??
-        fallbackFaculty.find((f) => /director/i.test(f.role)) ??
         fallbackFaculty.find((f) => /nadiya/i.test(f.name)) ??
+        fallbackFaculty.find((f) => /director/i.test(f.role)) ??
         fallbackFaculty[0] ??
         null
 
@@ -166,9 +183,8 @@ export function Staff() {
       setMembers(
         fallbackFaculty.filter(
           (f) =>
-            !/director/i.test(f.role) &&
-            !/founder/i.test(f.role) &&
-            /trainer/i.test(f.role)
+            f.id !== preferredDirector?.id &&
+            (/founder/i.test(f.role) || /trainer/i.test(f.role))
         )
       )
     }
@@ -189,7 +205,7 @@ export function Staff() {
             viewport={{ once: true }}
             className="text-xs font-bold uppercase tracking-[0.22em] text-indigo-400"
           >
-            Meet the trainers
+            Meet our leadership & trainers
           </motion.p>
           <motion.h2
             initial={{ opacity: 0, y: 12 }}
@@ -198,7 +214,7 @@ export function Staff() {
             transition={{ delay: 0.1 }}
             className="mt-3 text-3xl font-black tracking-tight text-white sm:text-4xl"
           >
-            The trainers guiding your growth
+            The people behind your growth
           </motion.h2>
         </div>
 

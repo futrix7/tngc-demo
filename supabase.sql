@@ -1095,6 +1095,8 @@ AS $$
 DECLARE
   v_year integer := EXTRACT(YEAR FROM CURRENT_DATE)::integer;
   v_today date := CURRENT_DATE;
+  v_phone_digits text := regexp_replace(COALESCE(p_phone, ''), '[^0-9]', '', 'g');
+  v_national_phone text;
   v_student_id text;
   v_payment_id text;
   v_receipt text;
@@ -1119,6 +1121,31 @@ BEGIN
      OR btrim(p_signature) = ''
      OR lower(btrim(p_signature)) <> lower(btrim(p_full_name)) THEN
     RAISE EXCEPTION 'signature does not match the enrolled name' USING ERRCODE = '22023';
+  END IF;
+
+  v_national_phone := CASE
+    WHEN v_phone_digits ~ '^91[0-9]{10}$' THEN right(v_phone_digits, 10)
+    ELSE v_phone_digits
+  END;
+
+  IF v_national_phone !~ '^[0-9]{10}$' THEN
+    RAISE EXCEPTION 'student phone number must be a valid 10-digit number'
+      USING ERRCODE = '22023';
+  END IF;
+
+  PERFORM pg_advisory_xact_lock(
+    hashtextextended('register_student_phone:' || v_national_phone, 0)
+  );
+
+  IF EXISTS (
+    SELECT 1
+      FROM students s
+     WHERE regexp_replace(COALESCE(s.phone, ''), '[^0-9]', '', 'g')
+           IN (v_national_phone, '91' || v_national_phone)
+  ) THEN
+    RAISE EXCEPTION 'a student is already registered with this phone number'
+      USING ERRCODE = '23505',
+            CONSTRAINT = 'students_phone_normalized_key';
   END IF;
 
   v_primary_course := p_course_slugs[1];

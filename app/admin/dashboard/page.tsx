@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { tooltipStyle, axisStyle, gridStyle } from "@/lib/chart-theme";
 import { useAuthState } from "@/hooks/use-auth";
+import { supabase } from "@/lib/supabase";
 
 const statusVariant: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   paid: "default",
@@ -86,13 +87,28 @@ export default function AdminDashboardPage() {
   const [dashboardError, setDashboardError] = useState("");
 
   const fetchDashboardData = useCallback(async () => {
-    const accessToken = session?.access_token;
-    if (!accessToken) return;
     try {
-      const res = await fetch("/api/admin/dashboard", {
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError) throw sessionError;
+      let accessToken = sessionData.session?.access_token;
+      if (!accessToken) {
+        throw new Error("Your session has expired. Please sign in again.");
+      }
+      let res = await fetch("/api/admin/dashboard", {
         cache: "no-store",
-        headers: { Authorization: `Bearer ${session.access_token}` },
+        headers: { Authorization: `Bearer ${accessToken}` },
       });
+      if (res.status === 401) {
+        const { data: refreshedSession, error: refreshError } = await supabase.auth.refreshSession();
+        accessToken = refreshedSession.session?.access_token ?? "";
+        if (refreshError || !accessToken) {
+          throw new Error("Your session has expired. Please sign in again.");
+        }
+        res = await fetch("/api/admin/dashboard", {
+          cache: "no-store",
+          headers: { Authorization: "Bearer " + accessToken },
+        });
+      }
       if (!res.ok) {
         const result = await res.json().catch(() => null) as { error?: string } | null;
         throw new Error(result?.error ?? "Failed to load dashboard data.");
@@ -109,13 +125,13 @@ export default function AdminDashboardPage() {
     } finally {
       setDashboardLoading(false);
     }
-  }, [session]);
+  }, []);
 
   useEffect(() => {
-    if (!loading && session?.access_token) {
+    if (!loading && session?.user.id) {
       void Promise.resolve().then(fetchDashboardData);
     }
-  }, [fetchDashboardData, loading, session]);
+  }, [fetchDashboardData, loading, session?.user.id]);
 
   if (loading || !session?.access_token) {
     return (

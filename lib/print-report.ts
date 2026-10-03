@@ -443,194 +443,57 @@ export function getPaymentReceiptFileName(receipt: PaymentReceipt): string {
 }
 
 export async function downloadPaymentReceiptPdf(receipt: PaymentReceipt): Promise<void> {
-  const { jsPDF } = await import("jspdf")
-  const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" })
-  const pageWidth = pdf.internal.pageSize.getWidth()
-  const pageHeight = pdf.internal.pageSize.getHeight()
-  const margin = 14
-  const contentWidth = pageWidth - margin * 2
-  const navy: [number, number, number] = [18, 59, 103]
-  const muted: [number, number, number] = [82, 97, 116]
-  const border: [number, number, number] = [219, 226, 234]
-  const title = receipt.kind === "payment"
-    ? receipt.status === "Paid" ? "PAYMENT RECEIPT" : "PAYMENT ACKNOWLEDGEMENT"
-    : "INSTALLMENT STATEMENT"
-  const documentNumber = paymentDocumentNumber(receipt)
-  const today = new Date().toISOString().slice(0, 10)
-  const receiptDate = receipt.kind === "payment" ? receipt.date : today
-  const date = printDate(receiptDate)
-  const money = (value: number) =>
-    `INR ${Number(value || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`
-  let y = margin
+  const { default: html2pdf } = await import("html2pdf.js")
+  const frame = document.createElement("iframe")
+  frame.setAttribute("aria-hidden", "true")
+  frame.style.position = "fixed"
+  frame.style.left = "-10000px"
+  frame.style.top = "0"
+  frame.style.width = "210mm"
+  frame.style.height = "297mm"
+  frame.style.border = "0"
 
-  const addSectionHeading = (text: string) => {
-    if (y + 13 > pageHeight - margin) {
-      pdf.addPage()
-      y = margin
-    }
-    y += 5
-    pdf.setFont("helvetica", "bold")
-    pdf.setFontSize(9)
-    pdf.setTextColor(...navy)
-    pdf.text(text.toUpperCase(), margin, y)
-    y += 2
-    pdf.setDrawColor(...border)
-    pdf.line(margin, y, pageWidth - margin, y)
-    y += 6
-  }
+  const loaded = new Promise<void>((resolve) => {
+    frame.addEventListener("load", () => resolve(), { once: true })
+  })
+  document.body.appendChild(frame)
 
-  const addDetailPairs = (items: Array<[string, string]>) => {
-    for (let index = 0; index < items.length; index += 2) {
-      const row = items.slice(index, index + 2)
-      const valueLines = row.map(([, value]) =>
-        pdf.splitTextToSize(value || "-", contentWidth / 2 - 10)
-      )
-      const rowHeight = Math.max(...valueLines.map((lines) => lines.length)) * 4 + 8
-      if (y + rowHeight > pageHeight - margin) {
-        pdf.addPage()
-        y = margin
-      }
+  try {
+    const frameDocument = frame.contentDocument
+    if (!frameDocument) throw new Error("Unable to access the receipt PDF document.")
+    frameDocument.open()
+    frameDocument.write(buildPaymentReceiptHtml(receipt, true))
+    frameDocument.close()
+    await loaded
+    await frameDocument.fonts.ready
 
-      row.forEach(([label], column) => {
-        const x = margin + column * (contentWidth / 2)
-        pdf.setFont("helvetica", "normal")
-        pdf.setFontSize(7)
-        pdf.setTextColor(...muted)
-        pdf.text(label.toUpperCase(), x, y)
-        pdf.setFont("helvetica", "bold")
-        pdf.setFontSize(9)
-        pdf.setTextColor(23, 32, 51)
-        pdf.text(valueLines[column], x, y + 5)
+    const receiptElement = frameDocument.querySelector<HTMLElement>(".sheet")
+    if (!receiptElement) throw new Error("The receipt content is missing.")
+
+    await html2pdf()
+      .set({
+        filename: `${getPaymentReceiptFileName(receipt)}.pdf`,
+        margin: 0,
+        image: { type: "jpeg", quality: 0.98 },
+        html2canvas: {
+          scale: 2,
+          useCORS: true,
+          backgroundColor: "#ffffff",
+          onclone: (clonedDocument: Document) => {
+            clonedDocument.documentElement.style.color = "#172033"
+            clonedDocument.body.style.color = "#172033"
+          },
+        },
+        jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
       })
-      y += rowHeight
-    }
+      .from(receiptElement)
+      .save()
+  } finally {
+    frame.remove()
   }
-
-  pdf.setFillColor(...navy)
-  pdf.roundedRect(margin, y, contentWidth, 31, 2, 2, "F")
-  pdf.setFillColor(255, 255, 255)
-  pdf.roundedRect(margin + 5, y + 6, 20, 18, 2, 2, "F")
-  pdf.setFont("helvetica", "bold")
-  pdf.setFontSize(9)
-  pdf.setTextColor(...navy)
-  pdf.text("TNGC", margin + 7.4, y + 16.5)
-  pdf.setTextColor(255, 255, 255)
-  pdf.setFontSize(12)
-  pdf.text("THE NEW GENERATION COMPUTERS", margin + 31, y + 12)
-  pdf.setFont("helvetica", "normal")
-  pdf.setFontSize(7)
-  pdf.text(INSTITUTE_ADDRESS, margin + 31, y + 19, { maxWidth: contentWidth - 38 })
-  y += 41
-
-  pdf.setFont("helvetica", "bold")
-  pdf.setFontSize(17)
-  pdf.setTextColor(...navy)
-  pdf.text(title, margin, y)
-  const statusColor: [number, number, number] = receipt.status === "Paid"
-    ? [4, 120, 87]
-    : receipt.status === "Rejected"
-      ? [185, 28, 28]
-      : [161, 98, 7]
-  pdf.setFontSize(8)
-  pdf.setTextColor(...statusColor)
-  pdf.text(receipt.status.toUpperCase(), pageWidth - margin, y, { align: "right" })
-  y += 8
-
-  pdf.setFillColor(243, 246, 250)
-  pdf.roundedRect(margin, y, contentWidth, 19, 1.5, 1.5, "F")
-  pdf.setFont("helvetica", "normal")
-  pdf.setFontSize(7)
-  pdf.setTextColor(...muted)
-  pdf.text(receipt.kind === "payment" ? "RECEIPT / PAYMENT NO." : "STATEMENT NO.", margin + 4, y + 6)
-  pdf.text(receipt.kind === "payment" ? "PAYMENT DATE" : "PRINTED ON", margin + contentWidth / 2, y + 6)
-  pdf.setFont("helvetica", "bold")
-  pdf.setFontSize(9)
-  pdf.setTextColor(23, 32, 51)
-  pdf.text(documentNumber, margin + 4, y + 13)
-  pdf.text(date, margin + contentWidth / 2, y + 13)
-  y += 20
-
-  addSectionHeading("Student and course")
-  addDetailPairs([
-    ["Student ID", receipt.studentId || "-"],
-    ["Student", receipt.studentName || "-"],
-    ["Phone", receipt.studentPhone || "-"],
-    ["Course", receipt.course || "-"],
-    ...(receipt.installment ? [["Installment", receipt.installment] as [string, string]] : []),
-    ...(receipt.dueDate ? [["Due date", printDate(receipt.dueDate)] as [string, string]] : []),
-  ])
-
-  if (receipt.kind === "payment") {
-    addSectionHeading("Payment details")
-    addDetailPairs([
-      ["Payment date", date],
-      ["Payment method", receipt.method || "-"],
-      ["Reference / note", receipt.reference || "-"],
-      ["Verification", receipt.verifiedAt ? printDate(receipt.verifiedAt) : receipt.status === "Paid" ? "Verified" : "Not verified"],
-    ])
-  }
-
-  addSectionHeading("Payment summary")
-  const summaryRows: Array<[string, string]> = receipt.kind === "payment"
-    ? [
-        ["This transaction", money(Number(receipt.transactionAmount ?? 0))],
-        ["Verified payments to date", money(receipt.paidToDate)],
-        ["Amount awaiting verification", money(receipt.awaitingVerification)],
-        ["Balance due", money(receipt.balanceDue)],
-      ]
-    : [
-        ["Installment amount", money(receipt.feeAmount)],
-        ["Verified payments against installment", money(receipt.paidToDate)],
-        ["Payments awaiting verification", money(receipt.awaitingVerification)],
-        ["Balance due", money(receipt.balanceDue)],
-      ]
-  const summaryHeight = summaryRows.length * 8 + 8
-  if (y + summaryHeight + 20 > pageHeight - margin) {
-    pdf.addPage()
-    y = margin
-  }
-  pdf.setFillColor(248, 250, 252)
-  pdf.setDrawColor(...border)
-  pdf.roundedRect(margin, y, contentWidth, summaryHeight, 1.5, 1.5, "FD")
-  y += 7
-  summaryRows.forEach(([label, value], index) => {
-    const isBalance = label === "Balance due"
-    pdf.setFont("helvetica", isBalance ? "bold" : "normal")
-    pdf.setFontSize(isBalance ? 10 : 8)
-    pdf.setTextColor(...(isBalance ? navy : muted))
-    pdf.text(label, margin + 5, y)
-    pdf.setTextColor(23, 32, 51)
-    pdf.text(value, pageWidth - margin - 5, y, { align: "right" })
-    if (index < summaryRows.length - 1) y += 8
-  })
-  y += summaryHeight - summaryRows.length * 8 + 5
-
-  const notice = receipt.status === "Paid"
-    ? "Payment verified and recorded by the institute."
-    : receipt.status === "Rejected"
-      ? "This payment was rejected or reversed and is not proof of payment received."
-      : "This payment is awaiting institute verification. This acknowledgement is not confirmation that funds have been received."
-  pdf.setFont("helvetica", "normal")
-  pdf.setFontSize(8)
-  pdf.setTextColor(...muted)
-  const noticeLines = pdf.splitTextToSize(notice, contentWidth - 8)
-  pdf.setDrawColor(...statusColor)
-  pdf.setLineWidth(1)
-  pdf.line(margin, y, margin, y + noticeLines.length * 4 + 5)
-  pdf.text(noticeLines, margin + 4, y + 4)
-  y += noticeLines.length * 4 + 10
-
-  pdf.setDrawColor(...border)
-  pdf.setLineWidth(0.2)
-  pdf.line(margin, Math.min(y, pageHeight - margin - 5), pageWidth - margin, Math.min(y, pageHeight - margin - 5))
-  pdf.setFontSize(7)
-  pdf.text("Computer-generated document - Please retain for your records", pageWidth / 2, Math.min(y + 4, pageHeight - margin), {
-    align: "center",
-  })
-  pdf.save(`${getPaymentReceiptFileName(receipt)}.pdf`)
 }
 
-export function buildPaymentReceiptHtml(receipt: PaymentReceipt): string {
+export function buildPaymentReceiptHtml(receipt: PaymentReceipt, pdfExport = false): string {
   const title = receipt.kind === "payment"
     ? receipt.status === "Paid" ? "PAYMENT RECEIPT" : "PAYMENT ACKNOWLEDGEMENT"
     : "INSTALLMENT STATEMENT"
@@ -677,7 +540,7 @@ export function buildPaymentReceiptHtml(receipt: PaymentReceipt): string {
       : "This payment is awaiting institute verification. This acknowledgement is not confirmation that funds have been received."
 
   return `<!DOCTYPE html>
-<html lang="en">
+<html lang="en"${pdfExport ? ' class="pdf-export"' : ""}>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -716,6 +579,8 @@ export function buildPaymentReceiptHtml(receipt: PaymentReceipt): string {
     .notice { margin-top: 18px; padding: 10px 12px; border-left: 3px solid ${statusTone === "paid" ? "#059669" : statusTone === "rejected" ? "#dc2626" : "#d97706"}; background: #f8fafc; color: #475569; font-size: 10px; }
     footer { display: flex; justify-content: space-between; gap: 12px; margin-top: auto; padding-top: 8px; border-top: 1px solid #dbe2ea; color: #64748b; font-size: 8px; }
     @media screen { body { padding: 24px; background: #eef2f6; } .sheet { background: #fff; box-shadow: 0 8px 30px #0f172a14; } }
+    .pdf-export body { padding: 0; background: #fff; }
+    .pdf-export .sheet { width: 198mm; max-width: 198mm; min-height: 285mm; margin: 0 auto; padding: 6mm; border: 0; box-shadow: none; }
     @media print {
       body { min-height: 269mm; }
       .sheet { width: 198mm; max-width: 198mm; min-height: 285mm; margin: 0 auto; padding: 6mm; border: 0; }
