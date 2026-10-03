@@ -29,6 +29,7 @@ export function AddStudentSheet({ open, onOpenChange, onSuccess }: AddStudentShe
   const [fullName, setFullName] = useState("")
   const [email, setEmail] = useState("")
   const [phone, setPhone] = useState("")
+  const [alternatePhone, setAlternatePhone] = useState("")
   const [fatherName, setFatherName] = useState("")
   const [fatherPhone, setFatherPhone] = useState("")
   const [course, setCourse] = useState("")
@@ -75,6 +76,7 @@ export function AddStudentSheet({ open, onOpenChange, onSuccess }: AddStudentShe
     setFullName("")
     setEmail("")
     setPhone("")
+    setAlternatePhone("")
     setFatherName("")
     setFatherPhone("")
     setCourse("")
@@ -91,6 +93,10 @@ export function AddStudentSheet({ open, onOpenChange, onSuccess }: AddStudentShe
   async function handleSubmit() {
     if (!fullName.trim() || !phone.trim() || !fatherName.trim() || !course || !totalFee) {
       toast("Please fill in all required fields", { variant: "destructive" })
+      return
+    }
+    if (alternatePhone && !/^\d{10}$/.test(alternatePhone)) {
+      toast("Enter a valid 10-digit alternate phone number.", { variant: "destructive" })
       return
     }
 
@@ -147,6 +153,7 @@ export function AddStudentSheet({ open, onOpenChange, onSuccess }: AddStudentShe
           fullName,
           email,
           phone,
+          alternatePhone,
           fatherName,
           fatherPhone,
           courseSlug: course,
@@ -239,6 +246,19 @@ export function AddStudentSheet({ open, onOpenChange, onSuccess }: AddStudentShe
           <Input id="fatherPhone" type="tel" inputMode="numeric" maxLength={10} placeholder="10-digit phone number" className={SHEET_INPUT_CLASS} value={fatherPhone} onChange={(e) => setFatherPhone(e.target.value)} />
         </FormField>
       </div>
+
+      <FormField label="Alternate Phone (optional)" htmlFor="alternatePhone">
+        <Input
+          id="alternatePhone"
+          type="tel"
+          inputMode="numeric"
+          maxLength={10}
+          placeholder="10-digit alternate phone number"
+          className={SHEET_INPUT_CLASS}
+          value={alternatePhone}
+          onChange={(event) => setAlternatePhone(event.target.value.replace(/\D/g, "").slice(0, 10))}
+        />
+      </FormField>
 
       <FormField label="Course">
         <Button

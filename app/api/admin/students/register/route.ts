@@ -66,6 +66,7 @@ export async function POST(request: Request) {
   const fullName = text(body.fullName)
   const phone = text(body.phone)
   const normalizedPhone = normalizeIndianPhone(phone)
+  const alternatePhone = text(body.alternatePhone)
   const fatherName = text(body.fatherName)
   const fatherPhone = text(body.fatherPhone)
   const courseSlug = text(body.courseSlug)
@@ -85,6 +86,7 @@ export async function POST(request: Request) {
   if (email && !EMAIL_PATTERN.test(email)) return NextResponse.json({ error: "Enter a valid email address." }, { status: 400 })
   if (!fullName || !fatherName) return NextResponse.json({ error: "Student and father/guardian names are required." }, { status: 400 })
   if (!normalizedPhone) return NextResponse.json({ error: "Enter a valid 10-digit student phone number." }, { status: 400 })
+  if (alternatePhone && !/^\d{10}$/.test(alternatePhone)) return NextResponse.json({ error: "Enter a valid 10-digit alternate phone number." }, { status: 400 })
   if (password.length < 6) return NextResponse.json({ error: "The login password must be at least 6 characters." }, { status: 400 })
   if (fatherPhone && !/^\d{10}$/.test(fatherPhone)) return NextResponse.json({ error: "Enter a valid 10-digit father/guardian phone number." }, { status: 400 })
   if (!courseSlug) return NextResponse.json({ error: "Select a course." }, { status: 400 })
@@ -181,6 +183,7 @@ export async function POST(request: Request) {
     p_installment_amounts: installmentSplit.amounts,
     p_payment_amount: paidNow.amount,
     p_total_fee_override: totalFee,
+    p_alternate_phone: alternatePhone || null,
   })
 
   if (error) {

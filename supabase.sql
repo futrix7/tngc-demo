@@ -929,6 +929,11 @@ DROP FUNCTION IF EXISTS public.register_student(
   numeric[], numeric[], numeric
 );
 
+DROP FUNCTION IF EXISTS public.register_student(
+  uuid, text, text, text, text, text, text[], text, text, text, text,
+  numeric[], numeric, numeric
+);
+
 CREATE OR REPLACE FUNCTION public.register_student(
   p_user_id uuid,
   p_full_name text,
@@ -943,7 +948,8 @@ CREATE OR REPLACE FUNCTION public.register_student(
   p_payment_description text,
   p_installment_amounts numeric[] DEFAULT NULL,
   p_payment_amount numeric DEFAULT NULL,
-  p_total_fee_override numeric DEFAULT NULL
+  p_total_fee_override numeric DEFAULT NULL,
+  p_alternate_phone text DEFAULT NULL
 )
 RETURNS TABLE (student_id text, payment_id text, total_fee numeric)
 LANGUAGE plpgsql
@@ -992,11 +998,11 @@ BEGIN
   v_payment_id := public.next_payment_code(v_year);
 
   INSERT INTO students (
-    id, user_id, full_name, email, phone, father_name, father_phone,
+    id, user_id, full_name, email, phone, father_name, father_phone, alternate_phone,
     course_slug, status, present_status, full_name_as_signature
   ) VALUES (
     v_student_id, p_user_id, p_full_name, p_email, p_phone, p_father_name,
-    NULLIF(p_father_phone, ''), v_primary_course,
+    NULLIF(p_father_phone, ''), NULLIF(p_alternate_phone, ''), v_primary_course,
     'Active', p_present_status, p_signature
   );
 
@@ -1054,23 +1060,23 @@ $$;
 
 COMMENT ON FUNCTION public.register_student(
   uuid, text, text, text, text, text, text[], text, text, text, text,
-  numeric[], numeric, numeric
+  numeric[], numeric, numeric, text
 ) IS
   'Creates a student, fee rows and schedules, and an optional Pending claim for a single amount handed over on day one. The schedule is at most 3 amounts of the caller''s own choosing; the payment is one figure of their own. Supports an admin-set total fee override for one course. service_role only.';
 
 REVOKE ALL ON FUNCTION public.register_student(
   uuid, text, text, text, text, text, text[], text, text, text, text,
-  numeric[], numeric, numeric
+  numeric[], numeric, numeric, text
 ) FROM PUBLIC;
 
 GRANT EXECUTE ON FUNCTION public.register_student(
   uuid, text, text, text, text, text, text[], text, text, text, text,
-  numeric[], numeric, numeric
+  numeric[], numeric, numeric, text
 ) TO service_role;
 
 ALTER FUNCTION public.register_student(
   uuid, text, text, text, text, text, text[], text, text, text, text,
-  numeric[], numeric, numeric
+  numeric[], numeric, numeric, text
 ) OWNER TO postgres;
 
 DROP FUNCTION IF EXISTS public.enroll_student_in_course(uuid, text);
