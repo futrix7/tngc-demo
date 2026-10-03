@@ -79,6 +79,7 @@ There are two separate things here and they were deliberately unmerged. Do not c
 ### Student management
 - Student directory with search, status filter, course filter, pagination, export
 - Student profile includes status and course context
+- Deactivated students remain in existing tables, appear in their own profile-only list, and regain their normal detail pages after activation; student self-service access to fees, payments, and certificates is blocked while inactive
 - Student registration supports optional email, required phone, guardian fields, branch, and course
 - Add-course flow supports custom total fee and optional first payment on enrollment
 
@@ -141,9 +142,18 @@ Important schema facts:
 
 ## Current migration state
 
-- supabase.sql is the source of truth for schema and migrations
-- supabase-verify.sql confirms expected SQL functions and grant state
-- supabase-seed.sql seeds branches/courses/faculty
+- supabase.sql is the source of truth for core schema
+- For a fresh project, run supabase.sql, then supabase-seed.sql, then supabase-student-import.sql
+- For an existing project, rerun the updated supabase.sql and then supabase-student-import.sql; the core script updates the admin course-enrollment RPC, and the import migration adds the conversion triggers and durable legacy source ID
+- The supplied CSV headers (`first_name_s`, `sur_name_s`, etc.) are staging headers, not `students` columns. In Supabase Studio, choose `public.student_legacy` as the destination; never choose `public.students`. Alternatively, use the Students page's Import CSV button
+- supabase-student-import.sql adds CSV-header columns, normalization and automatic conversion triggers; it does not create another staging table or load CSV rows
+- `student_legacy` is temporary staging, not an archive. Existing rows are converted and purged by the migration; future app or Studio imports are converted and deleted in the same database transaction. A failed conversion aborts the import rather than discarding its row
+- Converted rows retain a unique source CSV ID and legacy course/branch labels in `students`, so re-importing cannot create duplicates and imported profiles remain available in the Imported students tab and at their normal student profile routes
+- Converted rows are marked `students.is_legacy_import` so the regular Students directory and its counts/exports exclude them
+- Conversion leaves absent profile data, fees, payments, and login accounts empty. Add fees through the normal student course flow and use Set Password from the student profile to create a login when the phone is valid
+- The student profile header lists every course represented by that student's fee records. The Installments tab can split part of an unpaid line into a new due-dated installment without changing the course fee total; `add_student_fee_installment` performs the split transactionally and protects paid or pending claimed amounts
+- supabase-verify.sql contains read-only checks to run after setup
+- supabase-reset-users.sql is destructive and only for intentionally clearing linked app accounts; it preserves student profiles and the empty student_legacy staging table
 - The database bootstrap should be applied to Supabase before using sign-in or course/fee features
 - supabase.sql must be pasted into the Supabase SQL editor by hand: no management token or direct Postgres connection is available in this environment, so the service-role key cannot run the DDL
 

@@ -4,6 +4,23 @@ import { useState, useEffect, useCallback } from "react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import {
   Table,
   TableHeader,
@@ -21,12 +38,13 @@ import {
   Calendar,
   AlertTriangle,
   RotateCcw,
+  Plus,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 import { supabase } from "@/lib/supabase"
+import { localDate } from "@/lib/local-date"
 import { useToast } from "@/components/ui/sonner"
-import { CollectDialog, type CollectibleInstallment } from "@/components/admin/collect-dialog"
 import { useStudent } from "../layout"
 
 interface Installment {
@@ -43,6 +61,7 @@ interface Installment {
   pendingPaymentIds: string[]
   pendingClaimAmount: number
   pendingReference: string
+  availableToSplit: number
 }
 
 interface CollectionRecord {
@@ -67,27 +86,40 @@ export default function StudentInstallmentsPage() {
   const [totalFee, setTotalFee] = useState(0)
   const [collected, setCollected] = useState(0)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState("")
 
-  const [collecting, setCollecting] = useState<CollectibleInstallment | null>(null)
   const [reviewingId, setReviewingId] = useState<string | null>(null)
   const [unmarkingId, setUnmarkingId] = useState<string | null>(null)
+  const [addInstallmentOpen, setAddInstallmentOpen] = useState(false)
+  const [sourceInstallmentId, setSourceInstallmentId] = useState("")
+  const [newInstallmentLabel, setNewInstallmentLabel] = useState("Additional installment")
+  const [newInstallmentAmount, setNewInstallmentAmount] = useState("")
+  const [newInstallmentDueDate, setNewInstallmentDueDate] = useState(localDate())
+  const [addingInstallment, setAddingInstallment] = useState(false)
 
   const fetchData = useCallback(async () => {
     if (!student) return
 
     setLoading(true)
+    setLoadError("")
 
-    const { data: feesRows } = await supabase
-      .from("fees").select("id, total_fee, paid_amount, course_slug").eq("student_id", student.id)
+    const { data: feesRows, error: feesError } = await supabase
+      .from("fees").select("id, total_fee, course_slug").eq("student_id", student.id)
 
-    if (feesRows && feesRows.length > 0) {
-      const fTotal = feesRows.reduce((s, f) => s + (f.total_fee ?? 0), 0)
-      const fPaid = feesRows.reduce((s, f) => s + (f.paid_amount ?? 0), 0)
-      setTotalFee(fTotal)
-      setCollected(fPaid)
+    if (feesError) {
+      console.error("[student installments] fee lookup failed:", feesError.message)
+      setLoadError("This student's fee schedule could not be loaded.")
+      setLoading(false)
+      return
+    }
 
-      const feeIds = feesRows.map((f) => f.id)
-      const courseSlugs = [...new Set(feesRows.map((f) => f.course_slug).filter(Boolean))] as string[]
+    const currentFees = feesRows ?? []
+    const fTotal = currentFees.reduce((sum, fee) => sum + Number(fee.total_fee ?? 0), 0)
+    setTotalFee(fTotal)
+
+    if (currentFees.length > 0) {
+      const feeIds = currentFees.map((fee) => fee.id)
+      const courseSlugs = [...new Set(currentFees.map((fee) => fee.course_slug).filter(Boolean))] as string[]
 
       const [instResult, coursesResult] = await Promise.all([
         supabase
@@ -98,6 +130,15 @@ export default function StudentInstallmentsPage() {
           : Promise.resolve({ data: [] as { slug: string; name: string }[], error: null }),
       ])
 
+      if (instResult.error || coursesResult.error) {
+        const error = instResult.error ?? coursesResult.error
+        console.error("[student installments] schedule lookup failed:", error?.message)
+        setLoadError("This student's installment schedule could not be loaded.")
+        setInstallments([])
+        setLoading(false)
+        return
+      }
+
       const instRows = instResult.data ?? []
 
       // The progress shown on each line is computed from the ledger, not read off
@@ -105,13 +146,43 @@ export default function StudentInstallmentsPage() {
       // `Partial`, and the stored `Pending` used to be collapsed into "nothing
       // paid" here — so a student who had handed over ₹2,000 of ₹6,000 was shown
       // a full ₹6,000 still owed.
-      const { data: payRows } = instRows.length
+      const { data: payRows, error: installmentPaymentsError } = instRows.length
         ? await supabase
           .from("payments")
           .select("id, installment_id, amount, status, description")
           .in("installment_id", instRows.map((row) => row.id))
           .in("status", ["Paid", "Pending"])
         : { data: [] as { id: string; installment_id: string | null; amount: number; status: string; description: string | null }[] }
+
+      if (installmentPaymentsError) {
+        console.error("[student installments] installment payment lookup failed:", installmentPaymentsError.message)
+        setLoadError("This student's installment payment details could not be loaded.")
+        setLoading(false)
+        return
+      }
+
+      const { data: historyRows, error: historyError } = await supabase
+        .from("payments")
+        .select("id, amount, payment_date, method, description")
+        .eq("student_id", student.id)
+        .eq("status", "Paid")
+        .order("payment_date", { ascending: false })
+
+      if (historyError) {
+        console.error("[student installments] payment lookup failed:", historyError.message)
+        setLoadError("This student's payment totals could not be loaded.")
+        setLoading(false)
+        return
+      }
+
+      setCollected((historyRows ?? []).reduce((sum, payment) => sum + Number(payment.amount), 0))
+      setCollections((historyRows ?? []).map((payment) => ({
+        id: payment.id,
+        installmentLabel: payment.description ?? "Fee Payment",
+        amount: payment.amount,
+        collectedDate: payment.payment_date,
+        method: payment.method,
+      })))
 
       const paidBy: Record<string, number> = {}
       const claimedBy: Record<string, { amount: number; ids: string[]; reference: string }> = {}
@@ -129,7 +200,7 @@ export default function StudentInstallmentsPage() {
         }
       }
 
-      const slugByFee = new Map(feesRows.map((f) => [f.id, f.course_slug]))
+      const slugByFee = new Map(currentFees.map((fee) => [fee.id, fee.course_slug]))
       const nameBySlug = new Map((coursesResult.data ?? []).map((c) => [c.slug, c.name]))
 
       setInstallments(instRows.map((row) => {
@@ -150,24 +221,15 @@ export default function StudentInstallmentsPage() {
           pendingPaymentIds: claim?.ids ?? [],
           pendingClaimAmount: claim?.amount ?? 0,
           pendingReference: claim?.reference ?? "",
+          availableToSplit: Math.max(0, Number((amount - paidAmount - (claim?.amount ?? 0)).toFixed(2))),
         }
       }))
     }
 
-    const { data: historyRows } = await supabase
-      .from("payments").select("id, amount, payment_date, method, description")
-      .eq("student_id", student.id)
-      .eq("status", "Paid")
-      .order("payment_date", { ascending: false })
-
-    if (historyRows) {
-      setCollections(historyRows.map((p) => ({
-        id: p.id,
-        installmentLabel: p.description ?? "Fee Payment",
-        amount: p.amount,
-        collectedDate: p.payment_date,
-        method: p.method,
-      })))
+    if (currentFees.length === 0) {
+      setCollected(0)
+      setInstallments([])
+      setCollections([])
     }
 
     setLoading(false)
@@ -287,11 +349,77 @@ export default function StudentInstallmentsPage() {
     ;(acc[inst.course] ??= []).push(inst)
     return acc
   }, {})
+  const splitSources = open.filter((inst) => inst.availableToSplit > 0)
+  const selectedSplitSource = splitSources.find((inst) => inst.id === sourceInstallmentId)
+  const splitAmountValue = Number(newInstallmentAmount)
+  const splitAmountError = newInstallmentAmount.trim() === ""
+    ? "Enter the amount to move into the new installment."
+    : !Number.isFinite(splitAmountValue) || splitAmountValue <= 0
+      ? "Enter an amount greater than zero."
+      : Math.abs(splitAmountValue * 100 - Math.round(splitAmountValue * 100)) > 0.0001
+        ? "Use no more than two decimal places."
+        : selectedSplitSource && splitAmountValue >= selectedSplitSource.availableToSplit
+          ? `The amount must be less than ₹${selectedSplitSource.availableToSplit.toLocaleString("en-IN")} so the source installment remains open.`
+          : null
+
+  function openAddInstallment() {
+    const firstSource = splitSources[0]
+    if (!firstSource) return
+    setSourceInstallmentId(firstSource.id)
+    setNewInstallmentLabel("Additional installment")
+    setNewInstallmentAmount("")
+    setNewInstallmentDueDate(localDate())
+    setAddInstallmentOpen(true)
+  }
+
+  async function handleAddInstallment() {
+    if (!student || !selectedSplitSource || addingInstallment || splitAmountError) return
+    setAddingInstallment(true)
+
+    try {
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
+      if (sessionError) throw sessionError
+      const token = sessionData.session?.access_token
+      if (!token) {
+        toast("Your admin session has expired. Please sign in again.", { variant: "destructive" })
+        return
+      }
+
+      const response = await fetch("/api/admin/students/add-installment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          studentId: student.id,
+          feeId: selectedSplitSource.feeId,
+          sourceInstallmentId: selectedSplitSource.id,
+          label: newInstallmentLabel.trim(),
+          amount: Number(splitAmountValue.toFixed(2)),
+          dueDate: newInstallmentDueDate,
+        }),
+      })
+      const result = (await response.json().catch(() => ({}))) as { error?: string; label?: string }
+      if (!response.ok) {
+        toast(result.error ?? "We couldn't add that installment. Nothing was changed.", { variant: "destructive" })
+        return
+      }
+
+      toast(`${result.label ?? newInstallmentLabel} added to ${selectedSplitSource.course}. The course fee total is unchanged.`, {
+        variant: "success",
+      })
+      setAddInstallmentOpen(false)
+      await fetchData()
+    } catch (error) {
+      console.error("[student installments] add installment failed:", error)
+      toast("We couldn't add that installment. Nothing was changed.", { variant: "destructive" })
+    } finally {
+      setAddingInstallment(false)
+    }
+  }
 
   return (
     <div className="space-y-4">
       {/* Summary Cards */}
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 min-[420px]:grid-cols-3">
         <Card className="bg-gradient-to-br from-primary/10 to-primary/5 border-primary/20">
           <CardContent className="p-4 text-center">
             <IndianRupee className="size-6 text-primary mx-auto mb-1" />
@@ -316,12 +444,17 @@ export default function StudentInstallmentsPage() {
           </CardContent>
         </Card>
       </div>
+      {loadError && (
+        <Card className="border-destructive/40">
+          <CardContent className="p-4 text-sm text-destructive">{loadError}</CardContent>
+        </Card>
+      )}
 
       {/* Claims the student filed that are still waiting on the institute */}
       {awaiting.length > 0 && (
         <Card className="border-amber-300 dark:border-amber-800">
           <CardContent className="p-4 sm:p-5">
-            <div className="flex items-center justify-between mb-3">
+            <div className="mb-3 flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
               <h3 className="text-sm font-semibold">Claims awaiting confirmation</h3>
               <Badge variant="secondary" className="bg-amber-500/15 text-amber-700 dark:text-amber-400 text-xs">
                 {awaiting.length}
@@ -333,15 +466,15 @@ export default function StudentInstallmentsPage() {
             </p>
             <div className="space-y-2.5">
               {awaiting.map((inst) => (
-                <div key={inst.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20 p-3">
+                <div key={inst.id} className="flex flex-col gap-3 rounded-lg border border-amber-200 bg-amber-50/50 p-3 dark:border-amber-800 dark:bg-amber-950/20 sm:flex-row sm:items-center sm:justify-between">
                   <div className="min-w-0">
-                    <p className="text-xs sm:text-sm font-medium truncate">{inst.label} · {inst.course}</p>
-                    <p className="text-[11px] text-muted-foreground">
+                    <p className="break-words text-xs font-medium sm:text-sm">{inst.label} · {inst.course}</p>
+                    <p className="break-words text-[11px] text-muted-foreground">
                       Claimed ₹{inst.pendingClaimAmount.toLocaleString("en-IN")}
                       {inst.pendingReference && ` · ${inst.pendingReference}`}
                     </p>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="grid w-full grid-cols-2 gap-2 sm:w-auto">
                     <Button
                       size="sm"
                       variant="outline"
@@ -373,19 +506,40 @@ export default function StudentInstallmentsPage() {
       {/* Outstanding schedule, grouped by course */}
       <Card>
         <CardContent className="p-4 sm:p-5">
-          <div className="flex items-center justify-between mb-3">
+          <div className="mb-3 flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
             <h3 className="text-sm font-semibold">Outstanding Installments</h3>
-            <Badge variant="secondary" className="text-xs">{open.length}</Badge>
+            <div className="flex items-center gap-2">
+              <Badge variant="secondary" className="text-xs">{open.length}</Badge>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                onClick={openAddInstallment}
+                disabled={splitSources.length === 0}
+              >
+                <Plus className="size-4" />
+                Add installment
+              </Button>
+            </div>
           </div>
+          {student?.isLegacyImport && (
+            <div className="mb-3 flex items-start gap-2 rounded-md border border-amber-300/70 bg-amber-50/70 px-3 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+              <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+              <p>
+                The CSV course is historical only. Use <span className="font-medium">Add Course</span> to create
+                an active fee schedule, then use <span className="font-medium">Add installment</span> here for extra installments.
+              </p>
+            </div>
+          )}
           <div className="space-y-4">
             {Object.entries(grouped).map(([course, rows]) => (
               <div key={course} className="space-y-2.5">
-                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{course}</p>
+                <p className="break-words text-xs font-semibold uppercase tracking-wide text-muted-foreground">{course}</p>
                 {rows.map((inst) => {
                   const isOverdue = inst.dueDate < todayIso
                   return (
                     <div key={inst.id} className={cn(
-                      "flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3",
+                      "flex min-w-0 flex-col gap-3 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between",
                       isOverdue
                         ? "border-red-200 dark:border-red-900 bg-red-50/50 dark:bg-red-950/20"
                         : "border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20"
@@ -394,8 +548,8 @@ export default function StudentInstallmentsPage() {
                         {isOverdue
                           ? <AlertTriangle className="size-4 sm:size-5 text-red-600 shrink-0" />
                           : <Clock className="size-4 sm:size-5 text-amber-600 shrink-0" />}
-                        <div className="min-w-0">
-                          <p className="text-xs sm:text-sm font-medium truncate">{inst.label}</p>
+                        <div className="min-w-0 flex-1">
+                          <p className="break-words text-xs font-medium sm:text-sm">{inst.label}</p>
                           <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
                             <Calendar className="size-3" />
                             Due: {inst.dueDate}
@@ -403,7 +557,7 @@ export default function StudentInstallmentsPage() {
                           </div>
                         </div>
                       </div>
-                      <div className="flex items-center gap-3 shrink-0 ml-3">
+                      <div className="flex min-w-0 flex-wrap items-center justify-between gap-3 sm:shrink-0 sm:justify-end">
                         <div className="text-right">
                           <p className="text-sm font-bold">₹{inst.balance.toLocaleString()}</p>
                           {inst.paidAmount > 0 && (
@@ -415,22 +569,6 @@ export default function StudentInstallmentsPage() {
                         <Badge variant="secondary" className={cn("text-[10px]", statusStyles[inst.status])}>
                           {inst.status}
                         </Badge>
-                        <Button
-                          size="lg"
-                          className="gap-1.5 px-4"
-                          onClick={() => setCollecting({
-                            id: inst.id,
-                            student: student?.name,
-                            label: inst.label,
-                            title: inst.course,
-                            amount: inst.amount,
-                            balance: inst.balance,
-                            settleAll: true,
-                          })}
-                        >
-                          <Banknote className="size-4" />
-                          Collect
-                        </Button>
                       </div>
                     </div>
                   )
@@ -447,23 +585,23 @@ export default function StudentInstallmentsPage() {
       {/* Paid Installments */}
       <Card>
         <CardContent className="p-4 sm:p-5">
-          <div className="flex items-center justify-between mb-3">
+          <div className="mb-3 flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
             <h3 className="text-sm font-semibold">Paid Installments</h3>
             <Badge variant="secondary" className="text-xs bg-emerald-500/15 text-emerald-600">{paid.length}</Badge>
           </div>
           <div className="space-y-2.5">
             {paid.map((inst) => (
-              <div key={inst.id} className="flex items-center justify-between gap-3 rounded-lg border border-border p-3">
+              <div key={inst.id} className="flex min-w-0 flex-col gap-3 rounded-lg border border-border p-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex items-center gap-2.5 min-w-0 flex-1">
                   <CheckCircle2 className="size-4 sm:size-5 text-emerald-600 shrink-0" />
-                  <div className="min-w-0">
-                    <p className="text-xs sm:text-sm font-medium truncate">{inst.label} · {inst.course}</p>
+                  <div className="min-w-0 flex-1">
+                    <p className="break-words text-xs font-medium sm:text-sm">{inst.label} · {inst.course}</p>
                     <p className="text-[11px] text-muted-foreground">
                       Paid: {inst.paidDate ?? "—"}
                     </p>
                   </div>
                 </div>
-                <div className="flex items-center gap-3 shrink-0 ml-3">
+                <div className="flex flex-wrap items-center justify-between gap-3 sm:shrink-0 sm:justify-end">
                   <p className="text-sm font-bold">₹{inst.amount.toLocaleString()}</p>
                   {/* A part payment leaves a line on `Partial`, so the reverse
                       action has to be offered there too — not only on lines the
@@ -511,7 +649,12 @@ export default function StudentInstallmentsPage() {
               <TableBody>
                 {collections.map((c) => (
                   <TableRow key={c.id}>
-                    <TableCell className="font-medium text-xs">{c.installmentLabel}</TableCell>
+                    <TableCell className="font-medium text-xs">
+                      {c.installmentLabel}
+                      <span className="mt-1 block break-words text-[11px] font-normal text-muted-foreground sm:hidden">
+                        {c.collectedDate || "Date unavailable"} · {c.method || "Method unavailable"}
+                      </span>
+                    </TableCell>
                     <TableCell className="hidden sm:table-cell text-muted-foreground text-xs">{c.collectedDate}</TableCell>
                     <TableCell className="hidden sm:table-cell text-muted-foreground text-xs">{c.method}</TableCell>
                     <TableCell className="font-medium text-xs">₹{c.amount.toLocaleString()}</TableCell>
@@ -523,11 +666,89 @@ export default function StudentInstallmentsPage() {
         </Card>
       )}
 
-      <CollectDialog
-        installment={collecting}
-        onOpenChange={(open) => { if (!open) setCollecting(null) }}
-        onCollected={() => { setLoading(true); fetchData() }}
-      />
+      <Dialog open={addInstallmentOpen} onOpenChange={setAddInstallmentOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Add an installment</DialogTitle>
+            <DialogDescription>
+              Split part of an unpaid schedule line into a new due date. This does not change the course fee total;
+              verified payments and pending student claims stay assigned to the original line.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="splitSource">Split from</Label>
+              <Select value={sourceInstallmentId} onValueChange={(value) => setSourceInstallmentId(value ?? "")}>
+                <SelectTrigger id="splitSource">
+                  <SelectValue placeholder="Choose an outstanding installment" />
+                </SelectTrigger>
+                <SelectContent>
+                  {splitSources.map((inst) => (
+                    <SelectItem key={inst.id} value={inst.id}>
+                      {inst.course} · {inst.label} · available ₹{inst.availableToSplit.toLocaleString("en-IN")}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="newInstallmentLabel">New installment label</Label>
+              <Input
+                id="newInstallmentLabel"
+                maxLength={100}
+                value={newInstallmentLabel}
+                onChange={(event) => setNewInstallmentLabel(event.target.value)}
+                placeholder="e.g. Installment 4"
+              />
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="newInstallmentAmount">Amount to split</Label>
+                <Input
+                  id="newInstallmentAmount"
+                  type="number"
+                  inputMode="decimal"
+                  min="0.01"
+                  step="0.01"
+                  max={selectedSplitSource ? selectedSplitSource.availableToSplit : undefined}
+                  value={newInstallmentAmount}
+                  onChange={(event) => setNewInstallmentAmount(event.target.value)}
+                  aria-invalid={Boolean(splitAmountError)}
+                />
+                {splitAmountError && <p className="text-xs text-destructive">{splitAmountError}</p>}
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="newInstallmentDueDate">New due date</Label>
+                <Input
+                  id="newInstallmentDueDate"
+                  type="date"
+                  value={newInstallmentDueDate}
+                  onChange={(event) => setNewInstallmentDueDate(event.target.value)}
+                  required
+                />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAddInstallmentOpen(false)} disabled={addingInstallment}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => void handleAddInstallment()}
+              disabled={
+                addingInstallment
+                || !selectedSplitSource
+                || !newInstallmentLabel.trim()
+                || !newInstallmentDueDate
+                || Boolean(splitAmountError)
+              }
+            >
+              {addingInstallment ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Plus className="mr-2 size-4" />}
+              {addingInstallment ? "Adding..." : "Add installment"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

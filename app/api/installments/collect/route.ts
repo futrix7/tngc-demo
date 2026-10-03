@@ -5,7 +5,7 @@ import {
   supabaseAdmin,
 } from "@/lib/supabase-admin"
 import { describeRpcFailure, failureResponse } from "@/lib/api-response"
-import { parseSingleAmount } from "@/lib/amount-split"
+import { parsePaymentAmount } from "@/lib/amount-split"
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -111,7 +111,7 @@ export async function POST(request: Request) {
   const reference =
     typeof body.reference === "string" ? body.reference.trim() : ""
 
-  const collected = parseSingleAmount(body.amount)
+  const collected = parsePaymentAmount(body.amount)
   if (collected.error || collected.amount === null) {
     return NextResponse.json(
       { error: collected.error ?? "Enter an amount greater than zero." },

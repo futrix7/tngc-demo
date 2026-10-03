@@ -64,15 +64,7 @@ export function parseAmountSplit(values: unknown): {
   return { amounts, error: null }
 }
 
-/**
- * Reads the single figure a caller says they are paying now.
- *
- * A payment is one number, never a list of boxes. "Paying 2,000 of 5,000" is one
- * fact; the second, competing set of boxes that used to sit next to the schedule
- * was how the same payment ended up described two different ways on one screen.
- * Blank, absent and empty all mean the same thing — nothing is being paid yet,
- * so the caller passes NULL and the fee is simply left open.
- */
+/** Reads one positive amount with up to two decimal places for a fee schedule. */
 export function parseSingleAmount(value: unknown): {
   amount: number | null
   error: string | null
@@ -88,6 +80,31 @@ export function parseSingleAmount(value: unknown): {
   }
 
   return { amount: Number(amount.toFixed(2)), error: null }
+}
+
+/**
+ * Reads a payment amount in whole rupees. Payment records must not contain
+ * fractional rupees, even though fee and installment amounts may use decimals.
+ */
+export function parsePaymentAmount(value: unknown): {
+  amount: number | null
+  error: string | null
+} {
+  if (value === undefined || value === null || value === "") {
+    return { amount: null, error: null }
+  }
+
+  const amount = typeof value === "number" ? value : Number(value)
+
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return { amount: null, error: "The amount paid must be a number above zero." }
+  }
+
+  if (!Number.isInteger(amount)) {
+    return { amount: null, error: "The payment amount must be a whole number of rupees." }
+  }
+
+  return { amount, error: null }
 }
 
 /**

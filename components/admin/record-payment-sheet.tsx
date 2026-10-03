@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/select"
 import { supabase } from "@/lib/supabase"
 import { useToast } from "@/components/ui/sonner"
-import { checkAmountAgainstTotal, parseSingleAmount } from "@/lib/amount-split"
+import { checkAmountAgainstTotal, parsePaymentAmount } from "@/lib/amount-split"
 import { localDate } from "@/lib/local-date"
 import { cn } from "@/lib/utils"
 
@@ -162,7 +162,7 @@ export function RecordPaymentSheet({ open, onOpenChange, onSuccess }: RecordPaym
   }
 
   const selectedFee = fees.find((fee) => fee.id === feeId) ?? null
-  const parsed = parseSingleAmount(amount.trim() === "" ? null : amount)
+  const parsed = parsePaymentAmount(amount.trim() === "" ? null : amount)
   const amountError =
     !selectedFee
       ? null
@@ -308,9 +308,9 @@ export function RecordPaymentSheet({ open, onOpenChange, onSuccess }: RecordPaym
           <Input
             id="amount"
             type="number"
-            inputMode="decimal"
-            min="0.01"
-            step="0.01"
+            inputMode="numeric"
+            min="1"
+            step="1"
             max={selectedFee?.outstanding}
             placeholder={selectedFee ? String(selectedFee.outstanding) : "Enter amount"}
             value={amount}

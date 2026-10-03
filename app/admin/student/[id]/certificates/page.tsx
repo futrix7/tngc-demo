@@ -20,6 +20,10 @@ interface Certificate {
   course: string
   issuedDate: string
   credentialId: string
+  guardianName: string
+  courseStartDate: string
+  courseEndDate: string
+  division: string
   issuedBy: string
   type: string
   status: CertificateStatus
@@ -48,7 +52,7 @@ export default function StudentCertificatesPage() {
 
         const { data: certRows, error } = await supabase
           .from("certificates")
-          .select("id, name, course_slug, type, status, issued_date, credential_id, issued_by")
+          .select("id, name, course_slug, type, status, issued_date, credential_id, guardian_name, course_start_date, course_end_date, division, issued_by")
           .eq("student_id", student!.id)
           .order("created_at", { ascending: false })
 
@@ -79,6 +83,10 @@ export default function StudentCertificatesPage() {
             course: (row.course_slug && courseNames.get(row.course_slug)) || row.course_slug || "Course",
             issuedDate: row.issued_date || "—",
             credentialId: row.credential_id || "—",
+            guardianName: row.guardian_name || "",
+            courseStartDate: row.course_start_date || "",
+            courseEndDate: row.course_end_date || "",
+            division: row.division || "",
             issuedBy: row.issued_by || "TNGC Computers",
             type: row.type || "Completion",
             status: row.status as CertificateStatus,
@@ -118,6 +126,10 @@ export default function StudentCertificatesPage() {
       name: cert.name,
       credentialId: cert.credentialId,
       issuedDate: cert.issuedDate,
+      guardianName: cert.guardianName,
+      courseStartDate: cert.courseStartDate,
+      courseEndDate: cert.courseEndDate,
+      division: cert.division,
       issuedBy: cert.issuedBy,
     })
     if (!opened) {
@@ -127,7 +139,7 @@ export default function StudentCertificatesPage() {
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-3 gap-3 sm:gap-4">
+      <div className="grid grid-cols-1 gap-3 min-[420px]:grid-cols-3 sm:gap-4">
         <Card>
           <CardContent className="p-3 sm:p-4 text-center">
             <p className="text-xl sm:text-2xl font-bold">{certificates.length}</p>
@@ -152,13 +164,13 @@ export default function StudentCertificatesPage() {
         {certificates.map((cert) => (
           <Card key={cert.id}>
             <CardContent className="p-3 sm:p-4">
-              <div className="flex items-start gap-3">
-                <div className="size-9 sm:size-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+              <div className="flex min-w-0 items-start gap-3">
+                <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 sm:size-10">
                   <Award className="size-4 sm:size-5 text-primary" />
                 </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <p className="text-xs sm:text-sm font-medium truncate">{cert.name}</p>
+                <div className="min-w-0 flex-1">
+                  <div className="mb-1 flex flex-wrap items-center gap-2">
+                    <p className="min-w-0 flex-1 break-words text-xs font-medium sm:text-sm">{cert.name}</p>
                     <Badge
                       variant="secondary"
                       className={cn(
@@ -169,9 +181,9 @@ export default function StudentCertificatesPage() {
                       {cert.status}
                     </Badge>
                   </div>
-                  <p className="text-[11px] text-muted-foreground mb-1">{cert.course} &middot; {cert.issuedBy}</p>
+                  <p className="mb-1 break-words text-[11px] text-muted-foreground">{cert.course} · {cert.issuedBy}</p>
                   {cert.status === "Issued" && (
-                    <p className="text-[10px] text-muted-foreground font-mono">ID: {cert.credentialId} &middot; Issued: {cert.issuedDate}</p>
+                    <p className="break-all font-mono text-[10px] text-muted-foreground">ID: {cert.credentialId} · Issued: {cert.issuedDate}</p>
                   )}
                   {cert.status === "Rejected" && (
                     <p className="text-[10px] text-red-600 flex items-center gap-1">
@@ -181,7 +193,7 @@ export default function StudentCertificatesPage() {
                   )}
                 </div>
                 {cert.status === "Issued" && (
-                  <Button variant="outline" size="sm" className="gap-1 shrink-0" onClick={() => handlePrint(cert)}>
+                  <Button variant="outline" size="sm" className="shrink-0 gap-1" onClick={() => handlePrint(cert)}>
                     <Printer className="size-3" />
                     <span className="hidden sm:inline">Print</span>
                     <span className="sm:hidden">PDF</span>

@@ -5,7 +5,22 @@
 
 BEGIN;
 
--- 1) Remove app-owned user data
+-- Save account IDs before deleting profile rows, whose foreign keys may set
+-- user_id to NULL or cascade into auth.users.
+CREATE TEMP TABLE users_to_reset ON COMMIT DROP AS
+SELECT user_id
+FROM public.students
+WHERE user_id IS NOT NULL
+UNION
+SELECT user_id
+FROM public.admins
+WHERE user_id IS NOT NULL
+UNION
+SELECT user_id
+FROM public.teachers
+WHERE user_id IS NOT NULL;
+
+-- Remove app-owned user data. Student profiles and the CSV staging table are preserved.
 DELETE FROM public.certificates;
 DELETE FROM public.payments;
 DELETE FROM public.fee_extras;
@@ -17,26 +32,6 @@ DELETE FROM public.teachers;
 
 -- 2) Remove Supabase auth users created for the app
 DELETE FROM auth.users
-WHERE id IN (
-  SELECT user_id
-  FROM public.students
-  WHERE user_id IS NOT NULL
-
-  UNION
-
-  SELECT user_id
-  FROM public.admins
-  WHERE user_id IS NOT NULL
-
-  UNION
-
-  SELECT user_id
-  FROM public.teachers
-  WHERE user_id IS NOT NULL
-);
+WHERE id IN (SELECT user_id FROM users_to_reset);
 
 COMMIT;
-
--- Optional: if you want to reset the app back to a fresh empty state for all rows tied to users,
--- you can also remove course mappings after the above, but that will wipe the institute catalog.
--- Keep those tables if you want the app to remain usable without user records.

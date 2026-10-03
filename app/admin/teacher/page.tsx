@@ -29,7 +29,7 @@ interface Teacher {
   subjects: string[];
   experience: number;
   status: "Active" | "On Leave";
-  email: string;
+  email: string | null;
   phone: string;
   salary: number | null;
 }
@@ -257,7 +257,7 @@ export default function TeachersPage() {
               <div className="border-t pt-3 space-y-1.5">
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   <Mail className="h-3.5 w-3.5" />
-                  <span>{teacher.email}</span>
+                  <span>{teacher.email || "Email not provided"}</span>
                 </div>
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   <Phone className="h-3.5 w-3.5" />

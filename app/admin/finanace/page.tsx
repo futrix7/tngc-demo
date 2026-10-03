@@ -31,6 +31,8 @@ import {
   TrendingUp,
   TrendingDown,
   Download,
+  Trash2,
+  Loader2,
   Wallet,
   PiggyBank,
   CreditCard,
@@ -38,9 +40,18 @@ import {
   Lock,
   AlertTriangle,
 } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { ExportDialog } from "@/components/admin/export-dialog";
 import { supabase } from "@/lib/supabase";
+import { useToast } from "@/components/ui/sonner";
 import {
   AreaChart,
   Area,
@@ -94,6 +105,7 @@ interface BranchDatum {
 }
 
 interface RecentTransaction {
+  id: string;
   date: string;
   description: string;
   category: string;
@@ -131,8 +143,11 @@ function defaultFinanceRange() {
 }
 
 export default function AdminFinancePage() {
+  const { toast } = useToast();
   const [exportOpen, setExportOpen] = useState(false);
   const [expenseOpen, setExpenseOpen] = useState(false);
+  const [expenseToDelete, setExpenseToDelete] = useState<{ id: string; description: string } | null>(null);
+  const [deletingExpense, setDeletingExpense] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
   const [pin, setPin] = useState("");
   const [error, setError] = useState(false);
@@ -161,6 +176,39 @@ export default function AdminFinancePage() {
   const pendingFilterFetch = useRef<((success: boolean) => void) | null>(null);
   const filterFetchSucceeded = useRef(true);
   const [isInProfit, setIsInProfit] = useState(true);
+
+  async function confirmDeleteExpense() {
+    if (!expenseToDelete || deletingExpense) return;
+    setDeletingExpense(true);
+    try {
+      const { data, error } = await supabase
+        .from("transactions")
+        .delete()
+        .eq("id", expenseToDelete.id)
+        .eq("type", "expense")
+        .select("id")
+        .maybeSingle();
+
+      if (error) {
+        console.error("[finance] expense deletion failed:", error.message);
+        toast("Could not delete this expense. Please try again.", { variant: "destructive" });
+        return;
+      }
+      if (!data) {
+        toast("This expense was not found or could not be deleted.", { variant: "destructive" });
+        return;
+      }
+
+      toast("Expense deleted successfully.", { variant: "success" });
+      setExpenseToDelete(null);
+      setRefreshKey((current) => current + 1);
+    } catch (deleteError) {
+      console.error("[finance] expense deletion failed:", deleteError);
+      toast("Could not delete this expense. Please try again.", { variant: "destructive" });
+    } finally {
+      setDeletingExpense(false);
+    }
+  }
 
   // Derived rather than snapshotted into its own state: a stored slice goes
   // stale the moment the limit changes or a new transaction arrives, which is
@@ -423,6 +471,7 @@ export default function AdminFinancePage() {
       setBranchData(branchItems);
 
       const mergedIncomeRows: RecentTransaction[] = verifiedPayments.map((payment) => ({
+        id: payment.id,
         date: new Date(payment.payment_date).toLocaleDateString("en-IN", {
           day: "2-digit",
           month: "short",
@@ -435,6 +484,7 @@ export default function AdminFinancePage() {
       }));
 
       const mergedExpenseRows: RecentTransaction[] = expenseTransactions.map((transaction) => ({
+        id: transaction.id,
         date: new Date(transaction.date).toLocaleDateString("en-IN", {
           day: "2-digit",
           month: "short",
@@ -853,11 +903,12 @@ export default function AdminFinancePage() {
                         <TableHead>Category</TableHead>
                         <TableHead className="text-right">Amount</TableHead>
                         <TableHead className="text-right">Type</TableHead>
+                        <TableHead className="text-right">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {recentTransactions.map((txn, index) => (
-                        <TableRow key={index}>
+                      {recentTransactions.map((txn) => (
+                        <TableRow key={txn.id}>
                           <TableCell className="font-medium">{txn.date}</TableCell>
                           <TableCell>{txn.description}</TableCell>
                           <TableCell>
@@ -885,6 +936,22 @@ export default function AdminFinancePage() {
                               {txn.type}
                             </Badge>
                           </TableCell>
+                          <TableCell className="text-right">
+                            {txn.type === "expense" && (
+                              <Button
+                                variant="ghost"
+                                size="icon-sm"
+                                className="text-destructive hover:text-destructive"
+                                aria-label={`Delete expense: ${txn.description}`}
+                                onClick={() => setExpenseToDelete({
+                                  id: txn.id,
+                                  description: txn.description,
+                                })}
+                              >
+                                <Trash2 className="size-4" />
+                              </Button>
+                            )}
+                          </TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
@@ -909,6 +976,45 @@ export default function AdminFinancePage() {
           setRefreshKey((prev) => prev + 1);
         }}
       />
+      <Dialog
+        open={expenseToDelete !== null}
+        onOpenChange={(open) => {
+          if (!open && !deletingExpense) setExpenseToDelete(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <Trash2 className="size-5" />
+              Delete Expense
+            </DialogTitle>
+            <DialogDescription>
+              Are you sure you want to permanently delete{" "}
+              <span className="font-semibold text-foreground">
+                {expenseToDelete?.description || "this expense"}
+              </span>
+              ? This will update the finance totals and cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setExpenseToDelete(null)}
+              disabled={deletingExpense}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={confirmDeleteExpense}
+              disabled={deletingExpense}
+            >
+              {deletingExpense && <Loader2 className="size-4 animate-spin" />}
+              {deletingExpense ? "Deleting..." : "Delete Expense"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       {/* Exports every transaction the date filter covers, not just the rows
           currently on screen. The limit is there to make the table readable;
           silently exporting a tenth of the ledger because someone left the

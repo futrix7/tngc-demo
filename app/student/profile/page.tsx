@@ -137,7 +137,7 @@ export default function StudentProfile() {
           fatherName: s.father_name || "—",
           fatherPhone: s.father_phone || "—",
           motherName: s.mother_name || "—",
-          status: s.status,
+          status: s.status ?? "Not set",
         }
         setProfile(p)
         setEditName(p.name)

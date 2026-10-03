@@ -1,13 +1,12 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { Plus, Clock, Star, Edit, Trash2, TrendingUp, Award, Loader2 } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { Plus, Clock, Star, Edit, Trash2, Award, Loader2 } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Progress } from "@/components/ui/progress";
 import {
   Dialog,
   DialogContent,
@@ -24,6 +23,7 @@ import { supabase } from "@/lib/supabase";
 
 type CourseType = {
   id: string;
+  slug: string;
   name: string;
   short_name: string;
   duration: string;
@@ -32,7 +32,6 @@ type CourseType = {
   category: "long-term" | "short-term";
   popular?: boolean;
   rating?: number;
-  completionRate?: number;
   nextBatch?: string;
   status?: "active" | "upcoming" | "full";
   eligibility: string;
@@ -84,7 +83,7 @@ export default function AdminCoursesPage() {
   const [loading, setLoading] = useState(true);
   const [courses, setCourses] = useState<CourseType[]>([]);
 
-  async function fetchCourses() {
+  const fetchCourses = useCallback(async () => {
     setLoading(true);
 
     const { data: coursesData, error: coursesError } = await supabase
@@ -94,32 +93,70 @@ export default function AdminCoursesPage() {
 
     if (coursesError) {
       console.error("Error fetching courses:", coursesError);
+      toast("Unable to load courses: " + coursesError.message, { variant: "destructive" });
       setLoading(false);
       return;
     }
 
-    const { data: studentCounts } = await supabase
-      .from("students")
-      .select("course_slug")
-      .not("course_slug", "is", null);
+    const pageSize = 1000;
+    const feeEnrollments: { student_id: string | null; course_slug: string | null }[] = [];
+    const primaryEnrollments: { id: string; course_slug: string | null }[] = [];
+    for (let offset = 0; ; offset += pageSize) {
+      const { data, error } = await supabase
+        .from("fees")
+        .select("student_id, course_slug")
+        .not("course_slug", "is", null)
+        .order("id")
+        .range(offset, offset + pageSize - 1);
+      if (error) {
+        console.error("Error fetching course enrollments:", error);
+        toast("Unable to load enrolled student counts: " + error.message, { variant: "destructive" });
+        setLoading(false);
+        return;
+      }
+      feeEnrollments.push(...(data ?? []));
+      if (!data || data.length < pageSize) break;
+    }
 
-    const countByCourse: Record<string, number> = {};
-    (studentCounts || []).forEach((row) => {
-      const slug = row.course_slug;
-      countByCourse[slug] = (countByCourse[slug] || 0) + 1;
-    });
+    for (let offset = 0; ; offset += pageSize) {
+      const { data, error } = await supabase
+        .from("students")
+        .select("id, course_slug")
+        .eq("is_legacy_import", false)
+        .not("course_slug", "is", null)
+        .order("id")
+        .range(offset, offset + pageSize - 1);
+      if (error) {
+        console.error("Error fetching primary student courses:", error);
+        toast("Unable to load enrolled student counts: " + error.message, { variant: "destructive" });
+        setLoading(false);
+        return;
+      }
+      primaryEnrollments.push(...(data ?? []));
+      if (!data || data.length < pageSize) break;
+    }
+
+    const studentsByCourse: Record<string, Set<string>> = {};
+    for (const row of feeEnrollments) {
+      if (!row.course_slug || !row.student_id) continue;
+      (studentsByCourse[row.course_slug] ??= new Set()).add(row.student_id);
+    }
+    for (const row of primaryEnrollments) {
+      if (!row.course_slug) continue;
+      (studentsByCourse[row.course_slug] ??= new Set()).add(row.id);
+    }
 
     const mapped: CourseType[] = (coursesData || []).map((c) => ({
       id: c.id,
+      slug: c.slug,
       name: c.name,
       short_name: c.short_name ?? "",
       duration: c.duration,
       fee: c.fee_numeric ?? 0,
-      students: countByCourse[c.slug] ?? 0,
+      students: studentsByCourse[c.slug]?.size ?? 0,
       category: c.type,
       popular: c.popular ?? false,
       rating: c.rating ?? null,
-      completionRate: c.completion_rate ?? null,
       nextBatch: c.next_batch ?? null,
       status: c.status ?? "active",
       eligibility: c.eligibility ?? "",
@@ -129,12 +166,12 @@ export default function AdminCoursesPage() {
 
     setCourses(mapped);
     setLoading(false);
-  }
+  }, [toast]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- mount-time data fetch
     fetchCourses();
-  }, []);
+  }, [fetchCourses]);
 
   const filteredCourses =
     activeFilter === "all"
@@ -160,20 +197,37 @@ export default function AdminCoursesPage() {
     if (!deletingCourse || deleteName !== deletingCourse.name) return;
     setDeleting(true);
 
-    const { error } = await supabase.from("courses").delete().eq("id", deletingCourse.id);
+    try {
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError) throw sessionError;
+      const token = sessionData.session?.access_token;
+      if (!token) {
+        toast("Your admin session has expired. Please sign in again.", { variant: "destructive" });
+        return;
+      }
 
-    if (error) {
-      toast("Failed to delete course: " + error.message, { variant: "destructive" });
+      const response = await fetch("/api/admin/courses/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ courseId: deletingCourse.id, confirmationName: deleteName }),
+      });
+      const result = await response.json() as { error?: string };
+      if (!response.ok) {
+        toast(result.error ?? "Failed to delete course.", { variant: "destructive" });
+        return;
+      }
+
+      toast("Course deleted successfully", { variant: "success" });
+      setDeleteOpen(false);
+      setDeletingCourse(null);
+      setDeleteName("");
+      await fetchCourses();
+    } catch (error) {
+      console.error("[admin courses] delete failed:", error);
+      toast("Failed to delete course. Please try again.", { variant: "destructive" });
+    } finally {
       setDeleting(false);
-      return;
     }
-
-    toast("Course deleted successfully", { variant: "success" });
-    setDeleting(false);
-    setDeleteOpen(false);
-    setDeletingCourse(null);
-    setDeleteName("");
-    fetchCourses();
   }
 
   const deleteEnabled = deletingCourse && deleteName === deletingCourse.name;
@@ -267,30 +321,17 @@ export default function AdminCoursesPage() {
                   <p className="font-semibold text-sm">₹{course.fee.toLocaleString("en-IN")}</p>
                 </div>
                 <div className="rounded-lg bg-muted/50 p-2">
-                  <p className="text-muted-foreground">Students</p>
+                  <p className="text-muted-foreground">Enrolled students</p>
                   <p className="font-semibold text-sm">{course.students}</p>
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-2 text-xs">
+              <div className="flex items-center gap-1.5 text-xs">
                 <div className="flex items-center gap-1.5">
                   <Award className="h-3.5 w-3.5 text-amber-500" />
                   <span className="font-medium">{course.rating ?? "—"}</span>
                   <span className="text-muted-foreground">/ 5</span>
                 </div>
-                <div className="flex items-center gap-1.5">
-                  <TrendingUp className="h-3.5 w-3.5 text-emerald-500" />
-                  <span className="font-medium">{course.completionRate ?? 0}%</span>
-                  <span className="text-muted-foreground">done</span>
-                </div>
-              </div>
-
-              <div>
-                <div className="flex items-center justify-between text-xs mb-1">
-                  <span className="text-muted-foreground">Completion</span>
-                  <span className="font-medium">{course.completionRate ?? 0}%</span>
-                </div>
-                <Progress value={course.completionRate ?? 0} className="h-1.5" />
               </div>
 
               {course.nextBatch && (
@@ -331,12 +372,13 @@ export default function AdminCoursesPage() {
               Delete Course
             </DialogTitle>
             <DialogDescription>
-              This will permanently delete <span className="font-semibold text-foreground">{deletingCourse?.name}</span>. This action cannot be undone.
+              This permanently deletes <span className="font-semibold text-foreground">{deletingCourse?.name}</span>.
+              A course with student enrollments or linked financial/learning records cannot be deleted.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2 py-2">
             <Label htmlFor="deleteName" className="text-sm font-semibold">
-              Type the course name: <span className="text-foreground">{deletingCourse?.name}</span>
+              Type the course name to confirm: <span className="text-foreground">{deletingCourse?.name}</span>
             </Label>
             <Input
               id="deleteName"

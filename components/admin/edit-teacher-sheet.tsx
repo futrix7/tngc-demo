@@ -10,6 +10,10 @@ import {
   SHEET_SELECT_VALUE_CLASS,
 } from "@/components/admin/form-sheet"
 import { BranchSelect } from "@/components/admin/branch-select"
+import {
+  TeacherQualificationSelect,
+  TeacherSpecializationSelect,
+} from "@/components/admin/teacher-qualification-select"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -24,7 +28,7 @@ import { useToast } from "@/components/ui/sonner"
 export interface TeacherRecord {
   id: string
   full_name: string
-  email: string
+  email: string | null
   phone: string
   role: string
   branch_id?: string | null
@@ -99,8 +103,12 @@ function EditTeacherForm({
   const [saving, setSaving] = useState(false)
 
   async function handleSubmit() {
-    if (!fullName.trim() || !email.trim() || !phone.trim()) {
+    if (!fullName.trim() || !phone.trim()) {
       toast("Please fill in all required fields", { variant: "destructive" })
+      return
+    }
+    if (email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      toast("Enter a valid email address or leave it blank.", { variant: "destructive" })
       return
     }
 
@@ -115,7 +123,7 @@ function EditTeacherForm({
       .from("teachers")
       .update({
         full_name: fullName.trim(),
-        email: email.trim(),
+        email: email.trim() || null,
         phone: phone.trim(),
         role: role || "Teacher",
         branch_id: branch || null,
@@ -153,7 +161,7 @@ function EditTeacherForm({
         <FormField label="Full Name" htmlFor="editTeacherName">
           <Input id="editTeacherName" className={SHEET_INPUT_CLASS} value={fullName} onChange={(e) => setFullName(e.target.value)} />
         </FormField>
-        <FormField label="Email" htmlFor="editTeacherEmail">
+        <FormField label="Email (optional)" htmlFor="editTeacherEmail">
           <Input id="editTeacherEmail" className={SHEET_INPUT_CLASS} type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
         </FormField>
       </div>
@@ -177,36 +185,8 @@ function EditTeacherForm({
       </div>
 
       <div className="grid grid-cols-2 gap-3">
-        <FormField label="Qualification">
-          <Select value={qualification} onValueChange={(value) => setQualification(value ?? "")}>
-            <SelectTrigger className={SHEET_SELECT_TRIGGER_CLASS}>
-              <SelectValue className={SHEET_SELECT_VALUE_CLASS} placeholder="Select qualification" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="B.Tech">B.Tech</SelectItem>
-              <SelectItem value="M.Tech">M.Tech</SelectItem>
-              <SelectItem value="MCA">MCA</SelectItem>
-              <SelectItem value="M.Sc">M.Sc</SelectItem>
-              <SelectItem value="PhD">PhD</SelectItem>
-              <SelectItem value="Others">Others</SelectItem>
-            </SelectContent>
-          </Select>
-        </FormField>
-        <FormField label="Specialization">
-          <Select value={specialization} onValueChange={(value) => setSpecialization(value ?? "")}>
-            <SelectTrigger className={SHEET_SELECT_TRIGGER_CLASS}>
-              <SelectValue className={SHEET_SELECT_VALUE_CLASS} placeholder="Select specialization" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="Java">Java</SelectItem>
-              <SelectItem value="Python">Python</SelectItem>
-              <SelectItem value="Web Development">Web Development</SelectItem>
-              <SelectItem value="Database">Database</SelectItem>
-              <SelectItem value="Networking">Networking</SelectItem>
-              <SelectItem value="MS-Office">MS-Office</SelectItem>
-            </SelectContent>
-          </Select>
-        </FormField>
+        <TeacherQualificationSelect value={qualification} onChange={setQualification} />
+        <TeacherSpecializationSelect value={specialization} onChange={setSpecialization} />
       </div>
 
       <div className="grid grid-cols-2 gap-3">

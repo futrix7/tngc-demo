@@ -16,7 +16,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { ArrowLeft, Mail, Phone, Trash2, Loader2, User, Wallet, CreditCard, Award, IndianRupee, KeyRound } from "lucide-react"
+import { ArrowLeft, Mail, Phone, Trash2, Loader2, User, Wallet, CreditCard, Award, IndianRupee, KeyRound, BookOpen } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { supabase } from "@/lib/supabase"
 import { useToast } from "@/components/ui/sonner"
@@ -29,14 +29,26 @@ interface StudentData {
   email: string | null
   phone: string
   course: string
+  courses: string[]
+  previousCourse: string | null
+  isLegacyImport: boolean
   branch: string
-  status: "Active" | "Inactive" | "Pending"
+  status: "Active" | "Inactive" | "Pending" | null
 }
 
 const StudentContext = createContext<StudentData | null>(null)
+const RemoveStudentCourseContext = createContext<((courseName: string) => void) | null>(null)
 
 export function useStudent() {
   return useContext(StudentContext)
+}
+
+export function useRemoveStudentCourse() {
+  const removeCourse = useContext(RemoveStudentCourseContext)
+  if (!removeCourse) {
+    throw new Error("useRemoveStudentCourse must be used within the student admin layout.")
+  }
+  return removeCourse
 }
 
 const statusVariant: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
@@ -47,6 +59,7 @@ const statusVariant: Record<string, "default" | "secondary" | "destructive" | "o
 
 const navLinks = [
   { label: "Profile", href: "profile", icon: User },
+  { label: "Courses", href: "courses", icon: BookOpen },
   { label: "Fee", href: "fee", icon: Wallet },
   { label: "Installments", href: "installments", icon: IndianRupee },
   { label: "Payments", href: "payments", icon: CreditCard },
@@ -85,7 +98,7 @@ export default function StudentLayout({
     async function fetchStudent() {
       const { data, error } = await supabase
         .from("students")
-        .select("id, full_name, email, phone, course_slug, branch_id, status")
+        .select("id, full_name, email, phone, course_slug, legacy_course_label, is_legacy_import, branch_id, status")
         .eq("id", id)
         .single()
 
@@ -95,23 +108,25 @@ export default function StudentLayout({
         return
       }
 
-      const { data: feeRows } = await supabase
-        .from("fees")
-        .select("course_slug")
-        .eq("student_id", id)
+      const feeRows = data.status === "Inactive"
+        ? []
+        : (await supabase
+          .from("fees")
+          .select("course_slug")
+          .eq("student_id", id)).data ?? []
       const courseSlugs = [...new Set([
-        ...(feeRows ?? []).map((fee) => fee.course_slug),
-        data.course_slug,
+        ...feeRows.map((fee) => fee.course_slug),
+        ...(!data.is_legacy_import ? [data.course_slug] : []),
       ].filter((slug): slug is string => Boolean(slug)))]
-      let courseName = courseSlugs.join(", ")
+      const courseNames: string[] = []
       let branchName = data.branch_id ?? ""
 
       if (courseSlugs.length > 0) {
         const { data: courseData } = await supabase
           .from("courses").select("slug, name").in("slug", courseSlugs)
-        if (courseData?.length) courseName = courseSlugs
-          .map((slug) => courseData.find((course) => course.slug === slug)?.name ?? slug)
-          .join(", ")
+        courseNames.push(...courseSlugs.map(
+          (slug) => courseData?.find((course) => course.slug === slug)?.name ?? slug
+        ))
       }
       if (data.branch_id) {
         const { data: branchData } = await supabase
@@ -119,12 +134,16 @@ export default function StudentLayout({
         if (branchData) branchName = branchData.name
       }
 
+      const courses = [...new Set(courseNames)]
       setStudent({
         name: data.full_name,
         id: data.id,
         email: data.email,
         phone: data.phone,
-        course: courseName,
+        course: courses.join(", "),
+        courses,
+        previousCourse: data.legacy_course_label,
+        isLegacyImport: data.is_legacy_import,
         branch: branchName,
         status: data.status as StudentData["status"],
       })
@@ -291,51 +310,135 @@ export default function StudentLayout({
   }
 
   const basePath = `/admin/student/${id}`
+  const removeStudentCourse = (courseName: string) => {
+    setStudent((current) => {
+      if (!current) return current
+      const courses = current.courses.filter((course) => course !== courseName)
+      return { ...current, courses, course: courses.join(", ") }
+    })
+  }
+
+  if (student.status === "Inactive") {
+    return (
+      <StudentContext.Provider value={student}>
+        <RemoveStudentCourseContext.Provider value={removeStudentCourse}>
+        <div className="mx-auto w-full max-w-7xl space-y-4 px-1 sm:px-0">
+          <Link href="/admin/student" className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
+            <ArrowLeft className="size-4" />
+            Back to Students
+          </Link>
+          <Card>
+            <CardContent className="space-y-5 p-4 sm:p-6">
+              <div className="flex min-w-0 flex-col gap-4 sm:flex-row sm:items-start">
+                <div className="flex min-w-0 flex-1 items-start gap-3 sm:gap-4">
+                  <div className="flex size-14 shrink-0 items-center justify-center rounded-full bg-primary/10 text-base font-semibold text-primary sm:size-16 sm:text-lg">
+                    {student.name.split(" ").map((part) => part[0]).join("")}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <h1 className="break-words text-lg font-bold leading-tight sm:text-xl">{student.name}</h1>
+                    <p className="mt-1 break-all font-mono text-xs text-muted-foreground">{student.id}</p>
+                    <div className="mt-3 grid gap-2 text-sm text-muted-foreground sm:grid-cols-2">
+                      <span className="inline-flex min-w-0 items-start gap-2 break-all">
+                        <Mail className="mt-0.5 size-3.5 shrink-0" />
+                        {student.email || "No email on file"}
+                      </span>
+                      <span className="inline-flex min-w-0 items-start gap-2 break-all">
+                        <Phone className="size-3.5 shrink-0" />
+                        {student.phone || "No phone on file"}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                <Button className="w-full shrink-0 sm:w-auto" onClick={handleStatusToggle} disabled={changingStatus}>
+                  {changingStatus && <Loader2 className="mr-2 size-4 animate-spin" />}
+                  {changingStatus ? "Activating..." : "Activate student"}
+                </Button>
+              </div>
+              <div className="flex flex-wrap gap-2 border-t pt-4">
+                <Badge variant="destructive">Deactivated</Badge>
+                <Badge variant="outline">{student.branch || "No branch on file"}</Badge>
+                {student.courses.length > 0
+                  ? student.courses.map((course) => (
+                    <span key={course} className="max-w-full rounded-md bg-secondary px-2.5 py-1 text-xs leading-snug text-secondary-foreground [overflow-wrap:anywhere]">
+                      {course}
+                    </span>
+                  ))
+                  : <Badge variant="secondary">No course on file</Badge>}
+                {student.previousCourse && (
+                  <Badge variant="outline" className="max-w-full whitespace-normal text-left [overflow-wrap:anywhere]">
+                    Previous course (CSV): {student.previousCourse}
+                  </Badge>
+                )}
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Other student records are kept unchanged and are not loaded while this student is deactivated.
+                Activate the student to restore access to their normal profile, fee, payment, and certificate pages.
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+        </RemoveStudentCourseContext.Provider>
+      </StudentContext.Provider>
+    )
+  }
 
   return (
     <StudentContext.Provider value={student}>
-      <div className="space-y-4">
-        <Link href="/admin/student" className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
+      <RemoveStudentCourseContext.Provider value={removeStudentCourse}>
+      <div className="mx-auto w-full max-w-7xl min-w-0 space-y-4 px-1 sm:px-0">
+        <Link href="/admin/student" className="inline-flex min-h-9 items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground">
           <ArrowLeft className="size-4" />
           Back to Students
         </Link>
 
-        {/* Profile Header */}
-        <Card className="overflow-hidden">
-          <div className="h-20 sm:h-28 bg-gradient-to-br from-primary/20 to-primary/5" />
-          <CardContent className="relative px-4 sm:px-6 pb-4 sm:pb-6">
-            <div className="flex flex-col sm:flex-row sm:items-end gap-3 sm:gap-4 -mt-9 sm:-mt-10">
-              <div className="relative self-center sm:self-auto">
-                <div className="flex size-18 sm:size-20 items-center justify-center rounded-full border-4 border-background bg-muted text-xl sm:text-2xl font-bold" style={{ width: "5rem", height: "5rem" }}>
+        <Card>
+          <CardContent className="space-y-5 p-4 sm:p-6">
+            <div className="flex min-w-0 flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+              <div className="flex min-w-0 items-start gap-3 sm:gap-4">
+                <div className="flex size-14 shrink-0 items-center justify-center rounded-full bg-primary/10 text-lg font-semibold text-primary sm:size-16 sm:text-xl">
                   {student.name.split(" ").map((n) => n[0]).join("")}
                 </div>
-              </div>
-              <div className="flex-1 text-center sm:text-left pb-1">
-                <h1 className="text-lg sm:text-xl font-bold">{student.name}</h1>
-                <p className="text-xs text-muted-foreground">{student.id}</p>
-                <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
-                  <span className="flex items-center gap-1"><Mail className="size-3" />{student.email || "No email on file"}</span>
-                  <span className="flex items-center gap-1"><Phone className="size-3" />{student.phone}</span>
+                <div className="min-w-0 flex-1">
+                  <h1 className="break-words text-lg font-bold leading-tight sm:text-2xl">{student.name}</h1>
+                  <p className="mt-1 break-all font-mono text-xs text-muted-foreground">{student.id}</p>
+                  <div className="mt-3 grid gap-2 text-xs text-muted-foreground sm:grid-cols-2 sm:text-sm">
+                    <span className="inline-flex min-w-0 items-start gap-2 break-all">
+                      <Mail className="mt-0.5 size-3.5 shrink-0" />
+                      {student.email || "No email on file"}
+                    </span>
+                    <span className="inline-flex min-w-0 items-start gap-2 break-all">
+                      <Phone className="size-3.5 shrink-0" />
+                      {student.phone || "No phone on file"}
+                    </span>
+                  </div>
                 </div>
               </div>
-              <div className="flex gap-2 self-center sm:self-auto flex-wrap justify-center">
-                <Badge variant="secondary" className="text-[11px] sm:text-xs">{student.course}</Badge>
-                <Badge variant="secondary" className="text-[11px] sm:text-xs">{student.branch}</Badge>
-                <Badge variant={statusVariant[student.status]} className="text-[11px] sm:text-xs">{student.status}</Badge>
-                <Button variant="outline" size="sm" onClick={handleStatusToggle} disabled={changingStatus}>
-                  {changingStatus ? "Updating..." : student.status === "Active" ? "Deactivate" : "Activate"}
-                </Button>
-                <AddStudentCourseDialog
-                  studentId={student.id}
-                  onSuccess={(courseName) => setStudent((current) => current ? {
-                    ...current,
-                    course: [...new Set([...current.course.split(", ").filter(Boolean), courseName])].join(", "),
-                  } : current)}
-                />
+              <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:flex-wrap lg:w-auto lg:justify-end">
                 <Button
                   variant="outline"
                   size="sm"
-                  className="gap-2"
+                  className="w-full sm:w-auto"
+                  onClick={handleStatusToggle}
+                  disabled={changingStatus}
+                >
+                  {changingStatus && <Loader2 className="mr-2 size-4 animate-spin" />}
+                  {changingStatus ? "Updating..." : student.status === "Active" ? "Deactivate" : "Activate"}
+                </Button>
+                <div className="col-span-2 sm:col-span-1">
+                  <AddStudentCourseDialog
+                    studentId={student.id}
+                    className="w-full sm:w-auto"
+                    onSuccess={(courseName) => setStudent((current) => current ? {
+                      ...current,
+                      course: [...new Set([...current.courses, courseName])].join(", "),
+                      courses: [...new Set([...current.courses, courseName])],
+                    } : current)}
+                  />
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full gap-2 sm:w-auto"
                   onClick={() => { setNewPassword(""); setPasswordOpen(true) }}
                 >
                   <KeyRound className="size-4" />
@@ -343,8 +446,8 @@ export default function StudentLayout({
                 </Button>
                 <Button
                   variant="destructive"
-                  size="lg"
-                  className="gap-2 px-4"
+                  size="sm"
+                  className="w-full gap-2 sm:w-auto"
                   onClick={() => { setDeleteName(""); setDeleteConfirm(""); setDeleteOpen(true) }}
                 >
                   <Trash2 className="size-4" />
@@ -352,11 +455,24 @@ export default function StudentLayout({
                 </Button>
               </div>
             </div>
+            <div className="flex min-w-0 flex-wrap items-center gap-2 border-t pt-4">
+              <Badge variant="outline">{student.branch || "No branch on file"}</Badge>
+              <Badge variant={student.status ? statusVariant[student.status] : "outline"}>
+                {student.status ?? "Not set"}
+              </Badge>
+              {student.courses.length > 0
+                ? student.courses.map((course) => (
+                  <span key={course} className="max-w-full rounded-md bg-secondary px-2.5 py-1 text-xs leading-snug text-secondary-foreground [overflow-wrap:anywhere]">
+                    {course}
+                  </span>
+                ))
+                : <Badge variant="secondary">No course on file</Badge>}
+            </div>
           </CardContent>
         </Card>
 
         {/* Navigation */}
-        <div className="flex gap-1 overflow-x-auto pb-1 scrollbar-thin">
+        <nav aria-label="Student sections" className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
           {navLinks.map((link) => {
             const isActive = pathname === `${basePath}/${link.href}`
             const Icon = link.icon
@@ -365,7 +481,7 @@ export default function StudentLayout({
                 key={link.href}
                 href={`${basePath}/${link.href}`}
                 className={cn(
-                  "flex items-center gap-2 whitespace-nowrap rounded-lg px-4 py-2.5 text-sm font-medium transition-colors",
+                  "flex min-h-11 min-w-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg px-3 py-2.5 text-xs font-medium transition-colors sm:flex-1 sm:justify-start sm:px-4 sm:text-sm lg:flex-none",
                   isActive
                     ? "bg-primary text-primary-foreground"
                     : "bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground"
@@ -376,10 +492,10 @@ export default function StudentLayout({
               </Link>
             )
           })}
-        </div>
+        </nav>
 
         {/* Page Content */}
-        <div>{children}</div>
+        <div className="min-w-0">{children}</div>
 
         {/* Login Password Dialog */}
         <Dialog open={passwordOpen} onOpenChange={setPasswordOpen}>
@@ -391,8 +507,8 @@ export default function StudentLayout({
               </DialogTitle>
               <DialogDescription className="text-sm">
                 <span className="font-semibold text-foreground">{student.name}</span> signs in with
-                phone number <span className="font-semibold text-foreground">{student.phone}</span> and
-                this password. Changing it signs the student out of any active sessions.
+                phone number <span className="font-semibold text-foreground">{student.phone || "not set"}</span> and
+                this password. Saving creates a login if one does not exist; changing it signs the student out of any active sessions.
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-2 py-2">
@@ -489,6 +605,7 @@ export default function StudentLayout({
           </DialogContent>
         </Dialog>
       </div>
+      </RemoveStudentCourseContext.Provider>
     </StudentContext.Provider>
   )
 }

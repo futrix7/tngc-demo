@@ -33,23 +33,30 @@ export default function StudentFeePage() {
   const [paidAmount, setPaidAmount] = useState(0)
   const [installments, setInstallments] = useState<Installment[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
 
   const fetchFee = useCallback(async () => {
     if (!student) return
     setLoading(true)
+    setError("")
 
-    const { data: feesRows } = await supabase
-      .from("fees").select("id, total_fee, paid_amount, course_slug").eq("student_id", student.id)
+    const { data: feesRows, error: feesError } = await supabase
+      .from("fees").select("id, total_fee, course_slug").eq("student_id", student.id)
 
-    if (feesRows && feesRows.length > 0) {
-      const fTotal = feesRows.reduce((sum, f) => sum + (f.total_fee ?? 0), 0)
-      const fPaid = feesRows.reduce((sum, f) => sum + (f.paid_amount ?? 0), 0)
-      setTotalFee(fTotal)
-      setPaidAmount(fPaid)
+    if (feesError) {
+      console.error("[student fee] fee lookup failed:", feesError.message)
+      setError("This student's fee record could not be loaded.")
+      setLoading(false)
+      return
+    }
 
-      const feeIds = feesRows.map((f) => f.id)
-      const courseSlugs = [...new Set(feesRows.map((f) => f.course_slug).filter(Boolean))] as string[]
+    const currentFees = feesRows ?? []
+    setTotalFee(currentFees.reduce((sum, fee) => sum + Number(fee.total_fee ?? 0), 0))
+    setInstallments([])
 
+    if (currentFees.length > 0) {
+      const feeIds = currentFees.map((fee) => fee.id)
+      const courseSlugs = [...new Set(currentFees.map((fee) => fee.course_slug).filter(Boolean))] as string[]
       const [instResult, coursesResult] = await Promise.all([
         supabase
           .from("fee_installments").select("id, label, amount, due_date, paid_date, status, fee_id")
@@ -59,6 +66,14 @@ export default function StudentFeePage() {
           : Promise.resolve({ data: [] as { slug: string; name: string }[], error: null }),
       ])
 
+      if (instResult.error || coursesResult.error) {
+        const lookupError = instResult.error ?? coursesResult.error
+        console.error("[student fee] schedule lookup failed:", lookupError?.message)
+        setError("This student's installment schedule could not be loaded.")
+        setLoading(false)
+        return
+      }
+
       const instRows = instResult.data ?? []
 
       // Derived from the ledger rather than read off the stored status, so a part
@@ -66,19 +81,25 @@ export default function StudentFeePage() {
       // `Partial` used to be collapsed into `Pending` here, which reported the
       // full installment as unpaid and hid every part payment this student had
       // ever made.
-      const { data: payRows } = instRows.length
-        ? await supabase
-          .from("payments")
-          .select("installment_id, amount, status")
-          .in("installment_id", instRows.map((row) => row.id))
-          .eq("status", "Paid")
-        : { data: [] as { installment_id: string | null; amount: number; status: string }[] }
+      const { data: payRows, error: paymentsError } = await supabase
+        .from("payments")
+        .select("installment_id, amount, status")
+        .eq("student_id", student.id)
+        .eq("status", "Paid")
+
+      if (paymentsError) {
+        console.error("[student fee] payment lookup failed:", paymentsError.message)
+        setError("This student's payment totals could not be loaded.")
+        setLoading(false)
+        return
+      }
 
       const paidBy: Record<string, number> = {}
       for (const payment of payRows ?? []) {
         if (!payment.installment_id) continue
         paidBy[payment.installment_id] = (paidBy[payment.installment_id] ?? 0) + Number(payment.amount)
       }
+      setPaidAmount((payRows ?? []).reduce((sum, payment) => sum + Number(payment.amount), 0))
 
       const slugByFee = new Map(feesRows.map((f) => [f.id, f.course_slug]))
       const nameBySlug = new Map((coursesResult.data ?? []).map((c) => [c.slug, c.name]))
@@ -99,6 +120,8 @@ export default function StudentFeePage() {
           status: linePaid >= amount ? "Paid" : linePaid > 0 ? "Partial" : "Pending",
         }
       }))
+    } else {
+      setPaidAmount(0)
     }
 
     setLoading(false)
@@ -128,6 +151,18 @@ export default function StudentFeePage() {
 
   return (
     <div className="space-y-4">
+      {error && (
+        <Card className="border-destructive/40">
+          <CardContent className="p-4 text-sm text-destructive">{error}</CardContent>
+        </Card>
+      )}
+      {totalFee === 0 && (
+        <Card>
+          <CardContent className="p-4 text-sm text-muted-foreground">
+            No fees have been recorded for this student yet. Add a course from the profile header to start fee and payment tracking.
+          </CardContent>
+        </Card>
+      )}
       <Card className="bg-gradient-to-br from-primary/10 to-primary/5 border-primary/20">
         <CardContent className="p-4 sm:p-6">
           <div className="flex items-center justify-between mb-3 sm:mb-4">
@@ -158,7 +193,7 @@ export default function StudentFeePage() {
                 {rows.map((inst) => {
                   const overdue = inst.balance > 0 && inst.dueDate < todayIso
                   return (
-                    <div key={inst.id} className="flex items-center justify-between gap-3 rounded-lg border border-border p-2.5 sm:p-3">
+                    <div key={inst.id} className="flex flex-col gap-3 rounded-lg border border-border p-2.5 sm:flex-row sm:items-center sm:justify-between sm:p-3">
                       <div className="flex items-center gap-2 sm:gap-2.5 min-w-0 flex-1">
                         {inst.status === "Paid" ? (
                           <CheckCircle2 className="size-4 sm:size-5 text-emerald-600 shrink-0" />
@@ -167,25 +202,27 @@ export default function StudentFeePage() {
                         ) : (
                           <Clock className="size-4 sm:size-5 text-amber-600 shrink-0" />
                         )}
-                        <div className="min-w-0">
-                          <p className="text-xs sm:text-sm font-medium truncate">{inst.label}</p>
-                          <p className="text-[11px] text-muted-foreground truncate">
+                        <div className="min-w-0 flex-1">
+                          <p className="break-words text-xs font-medium sm:text-sm">{inst.label}</p>
+                          <p className="break-words text-[11px] text-muted-foreground">
                             Due: {inst.dueDate}{inst.paidDate ? ` · Paid: ${inst.paidDate}` : ""}
                             {overdue ? " · Overdue" : ""}
                           </p>
                         </div>
                       </div>
-                      <div className="text-right shrink-0 ml-3">
+                      <div className="flex shrink-0 items-center justify-between gap-3 sm:ml-3 sm:justify-end">
                         {/* The figure owed, not the figure scheduled. On a partly
                             paid line these differ, and showing the scheduled one
                             was how a part payment came to look unpaid. */}
-                        <p className="text-xs sm:text-sm font-bold">
-                          ₹{(inst.balance > 0 ? inst.balance : inst.amount).toLocaleString()}
-                        </p>
-                        {inst.balance > 0 && inst.paidAmount > 0 && (
-                          <p className="text-[11px] text-muted-foreground">of ₹{inst.amount.toLocaleString()}</p>
-                        )}
-                        <Badge variant="secondary" className={cn("text-[10px]", statusStyles[inst.status])}>
+                        <div className="text-right">
+                          <p className="text-xs font-bold sm:text-sm">
+                            ₹{(inst.balance > 0 ? inst.balance : inst.amount).toLocaleString()}
+                          </p>
+                          {inst.balance > 0 && inst.paidAmount > 0 && (
+                            <p className="text-[11px] text-muted-foreground">of ₹{inst.amount.toLocaleString()}</p>
+                          )}
+                        </div>
+                        <Badge variant="secondary" className={cn("shrink-0 text-[10px]", statusStyles[inst.status])}>
                           {inst.status}
                         </Badge>
                       </div>

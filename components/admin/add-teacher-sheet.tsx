@@ -3,20 +3,15 @@
 import { useState } from "react"
 import { GraduationCap } from "lucide-react"
 import {
+  TeacherQualificationSelect,
+  TeacherSpecializationSelect,
+} from "@/components/admin/teacher-qualification-select"
+import {
   FormSheet,
   FormField,
   SHEET_INPUT_CLASS,
-  SHEET_SELECT_TRIGGER_CLASS,
-  SHEET_SELECT_VALUE_CLASS,
 } from "@/components/admin/form-sheet"
 import { Input } from "@/components/ui/input"
-import {
-  Select,
-  SelectTrigger,
-  SelectValue,
-  SelectContent,
-  SelectItem,
-} from "@/components/ui/select"
 import { supabase } from "@/lib/supabase"
 import { mintId } from "@/lib/mint-id"
 import { useToast } from "@/components/ui/sonner"
@@ -39,8 +34,12 @@ export function AddTeacherSheet({ open, onOpenChange, onSuccess }: AddTeacherShe
   const [saving, setSaving] = useState(false)
 
   async function handleSubmit() {
-    if (!fullName.trim() || !email.trim() || !phone.trim()) {
+    if (!fullName.trim() || !phone.trim()) {
       toast("Please fill in all required fields", { variant: "destructive" })
+      return
+    }
+    if (email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      toast("Enter a valid email address or leave it blank.", { variant: "destructive" })
       return
     }
 
@@ -61,7 +60,7 @@ export function AddTeacherSheet({ open, onOpenChange, onSuccess }: AddTeacherShe
     const { error } = await supabase.from("teachers").insert({
       id: mintId("TCH"),
       full_name: fullName.trim(),
-      email: email.trim(),
+      email: email.trim() || null,
       phone: phone.trim(),
       role: "Teacher",
       subjects: [],
@@ -105,7 +104,7 @@ export function AddTeacherSheet({ open, onOpenChange, onSuccess }: AddTeacherShe
         <FormField label="Full Name" htmlFor="fullName">
           <Input id="fullName" placeholder="Enter full name" className={SHEET_INPUT_CLASS} value={fullName} onChange={(e) => setFullName(e.target.value)} />
         </FormField>
-        <FormField label="Email" htmlFor="email">
+        <FormField label="Email (optional)" htmlFor="email">
           <Input id="email" type="email" placeholder="Enter email" className={SHEET_INPUT_CLASS} value={email} onChange={(e) => setEmail(e.target.value)} />
         </FormField>
       </div>
@@ -114,39 +113,11 @@ export function AddTeacherSheet({ open, onOpenChange, onSuccess }: AddTeacherShe
         <FormField label="Phone" htmlFor="phone">
           <Input id="phone" type="tel" placeholder="Enter phone" className={SHEET_INPUT_CLASS} value={phone} onChange={(e) => setPhone(e.target.value)} />
         </FormField>
-        <FormField label="Qualification">
-          <Select value={qualification} onValueChange={(v) => setQualification(v ?? "")}>
-            <SelectTrigger className={SHEET_SELECT_TRIGGER_CLASS}>
-              <SelectValue className={SHEET_SELECT_VALUE_CLASS} placeholder="Select qualification" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="B.Tech">B.Tech</SelectItem>
-              <SelectItem value="M.Tech">M.Tech</SelectItem>
-              <SelectItem value="MCA">MCA</SelectItem>
-              <SelectItem value="M.Sc">M.Sc</SelectItem>
-              <SelectItem value="PhD">PhD</SelectItem>
-              <SelectItem value="Others">Others</SelectItem>
-            </SelectContent>
-          </Select>
-        </FormField>
+        <TeacherQualificationSelect value={qualification} onChange={setQualification} />
       </div>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <FormField label="Specialization">
-          <Select value={specialization} onValueChange={(v) => setSpecialization(v ?? "")}>
-            <SelectTrigger className={SHEET_SELECT_TRIGGER_CLASS}>
-              <SelectValue className={SHEET_SELECT_VALUE_CLASS} placeholder="Select specialization" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="Java">Java</SelectItem>
-              <SelectItem value="Python">Python</SelectItem>
-              <SelectItem value="Web Development">Web Development</SelectItem>
-              <SelectItem value="Database">Database</SelectItem>
-              <SelectItem value="Networking">Networking</SelectItem>
-              <SelectItem value="MS-Office">MS-Office</SelectItem>
-            </SelectContent>
-          </Select>
-        </FormField>
+        <TeacherSpecializationSelect value={specialization} onChange={setSpecialization} />
       </div>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">

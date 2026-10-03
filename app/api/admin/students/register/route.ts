@@ -5,7 +5,7 @@ import {
   checkAmountAgainstTotal,
   checkAmountSplitAgainst,
   parseAmountSplit,
-  parseSingleAmount,
+  parsePaymentAmount,
 } from "@/lib/amount-split"
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/
@@ -74,7 +74,7 @@ export async function POST(request: Request) {
   // will see; the second is a single number for what is physically in the hand
   // today. Neither is worked out for the administrator — see lib/amount-split.ts.
   const installmentSplit = parseAmountSplit(body.installmentAmounts)
-  const paidNow = parseSingleAmount(body.paymentAmount)
+  const paidNow = parsePaymentAmount(body.paymentAmount)
   const paymentMethod = text(body.paymentMethod).toLowerCase() || "cash"
   const paymentReference = text(body.paymentReference)
   // The administrator chooses the login password. Blank falls back to the

@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog"
 import { supabase } from "@/lib/supabase"
 import { useToast } from "@/components/ui/sonner"
+import { parsePaymentAmount } from "@/lib/amount-split"
 
 interface AddStudentSheetProps {
   open: boolean
@@ -116,23 +117,17 @@ export function AddStudentSheet({ open, onOpenChange, onSuccess }: AddStudentShe
     // to the fee. There is no second set of boxes to keep in step with the
     // schedule: paying 2,000 of a 5,000 fee is one number, and the schedule is a
     // plan for when the rest arrives, not a set of instructions for this form.
-    const paidText = amountPaidNow.trim()
-    let amountPaid = 0
-
-    if (paidText) {
-      amountPaid = Number(paidText)
-
-      if (!Number.isFinite(amountPaid) || amountPaid <= 0) {
-        toast("The amount paid must be a number above zero.", { variant: "destructive" })
-        return
-      }
-
-      if (amountPaid > fee) {
-        toast(`The payment cannot be more than the ₹${fee.toLocaleString("en-IN")} fee.`, {
-          variant: "destructive",
-        })
-        return
-      }
+    const parsedPayment = parsePaymentAmount(amountPaidNow.trim() || null)
+    const amountPaid = parsedPayment.amount ?? 0
+    if (parsedPayment.error) {
+      toast(parsedPayment.error, { variant: "destructive" })
+      return
+    }
+    if (amountPaid > fee) {
+      toast(`The payment cannot be more than the ₹${fee.toLocaleString("en-IN")} fee.`, {
+        variant: "destructive",
+      })
+      return
     }
 
     setSaving(true)
@@ -342,9 +337,9 @@ export function AddStudentSheet({ open, onOpenChange, onSuccess }: AddStudentShe
           <Input
             id="amountPaidNow"
             type="number"
-            inputMode="decimal"
-            min="0"
-            step="0.01"
+            inputMode="numeric"
+            min="1"
+            step="1"
             max={totalCourseFee || undefined}
             placeholder="0"
             aria-invalid={paidOverFee}

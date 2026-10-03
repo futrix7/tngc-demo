@@ -11,7 +11,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ArrowLeft, Award, Printer, CheckCircle2, Clock, Eye, Send, Loader2, XCircle, Hourglass } from "lucide-react"
 import { useToast } from "@/components/ui/sonner"
 import { supabase } from "@/lib/supabase"
-import { printCertificate } from "@/lib/certificate-print"
+import { createCertificateHtml, printCertificate } from "@/lib/certificate-print"
 import { mintId } from "@/lib/mint-id"
 import { QueryError } from "@/components/student/data-state"
 
@@ -24,6 +24,10 @@ interface Certificate {
   course: string
   issuedDate: string
   credentialId: string
+  guardianName: string
+  courseStartDate: string
+  courseEndDate: string
+  division: string
   status: CertificateStatus
   issuedBy: string
   type: "Completion" | "Proficiency" | "Module"
@@ -178,6 +182,10 @@ export default function StudentCertificates() {
             course: (c.course_slug && courseMap.get(c.course_slug)) || c.course_slug || "Course",
             issuedDate: c.issued_date || "—",
             credentialId: c.credential_id || "—",
+            guardianName: c.guardian_name || "",
+            courseStartDate: c.course_start_date || "",
+            courseEndDate: c.course_end_date || "",
+            division: c.division || "",
             status: c.status as Certificate["status"],
             issuedBy: c.issued_by || "TNGC Computers",
             type: c.type,
@@ -213,6 +221,10 @@ export default function StudentCertificates() {
       name: cert.name,
       credentialId: cert.credentialId,
       issuedDate: cert.issuedDate,
+      guardianName: cert.guardianName,
+      courseStartDate: cert.courseStartDate,
+      courseEndDate: cert.courseEndDate,
+      division: cert.division,
       issuedBy: cert.issuedBy,
     })
     if (!opened) {
@@ -470,34 +482,30 @@ export default function StudentCertificates() {
 
       {/* Certificate Preview Dialog */}
       <Dialog open={!!viewCert} onOpenChange={(open) => !open && setViewCert(null)}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className="w-[calc(100%-1rem)] max-w-[calc(100%-1rem)] max-h-[90dvh] overflow-y-auto overscroll-contain p-3 sm:max-w-5xl sm:p-4">
           {viewCert && (
             <>
               <DialogHeader>
                 <DialogTitle>Certificate Preview</DialogTitle>
               </DialogHeader>
-              <div className="rounded-xl border-2 border-primary/30 bg-linear-to-b from-primary/5 to-white p-6 space-y-4">
-                <div className="text-center space-y-1">
-                  <p className="text-lg font-bold tracking-wider text-primary">TNGC</p>
-                  <p className="text-[10px] uppercase tracking-widest text-muted-foreground">Teja Nagendra Government College</p>
-                </div>
-                <div className="text-center space-y-2 py-2">
-                  <p className="text-xs uppercase tracking-wider text-muted-foreground">This is to certify that</p>
-                  <p className="text-lg font-bold">{studentName}</p>
-                  <p className="text-xs text-muted-foreground">has successfully completed</p>
-                  <p className="text-sm font-semibold">{viewCert.course}</p>
-                </div>
-                <div className="grid grid-cols-2 gap-3 text-center text-xs">
-                  <div className="rounded-lg bg-muted/50 p-2">
-                    <p className="text-muted-foreground text-[10px]">Credential ID</p>
-                    <p className="font-mono font-semibold">{viewCert.credentialId}</p>
-                  </div>
-                  <div className="rounded-lg bg-muted/50 p-2">
-                    <p className="text-muted-foreground text-[10px]">Date Issued</p>
-                    <p className="font-semibold">{viewCert.issuedDate}</p>
-                  </div>
-                </div>
-              </div>
+              <iframe
+                title="Issued certificate preview"
+                srcDoc={createCertificateHtml({
+                  studentName,
+                  guardianName: viewCert.guardianName,
+                  course: viewCert.course,
+                  type: viewCert.type,
+                  name: viewCert.name,
+                  credentialId: viewCert.credentialId,
+                  issuedDate: viewCert.issuedDate,
+                  courseStartDate: viewCert.courseStartDate,
+                  courseEndDate: viewCert.courseEndDate,
+                  division: viewCert.division,
+                  issuedBy: viewCert.issuedBy,
+                })}
+                sandbox=""
+                className="block aspect-[297/210] max-h-[65dvh] min-h-48 w-full rounded-lg border bg-white"
+              />
               <Button className="w-full gap-1 mt-2" onClick={() => handlePrint(viewCert)}>
                 <Printer className="size-3" />
                 Print / Save as PDF

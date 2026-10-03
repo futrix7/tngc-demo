@@ -16,6 +16,7 @@ import { Label } from "@/components/ui/label"
 import { useToast } from "@/components/ui/sonner"
 import { supabase } from "@/lib/supabase"
 import { cn } from "@/lib/utils"
+import { parsePaymentAmount } from "@/lib/amount-split"
 
 export interface CollectibleInstallment {
   id: string
@@ -79,15 +80,17 @@ export function CollectDialog({ installment, onOpenChange, onCollected }: Collec
   }
 
   const entered = amount.trim() === "" ? 0 : Number(amount)
+  const settleAll = installment !== null && installment.settleAll && amount.trim() === ""
+  const parsedAmount = parsePaymentAmount(amount.trim() === "" ? null : amount)
   const amountError =
     installment && amount.trim() !== ""
-      ? !Number.isFinite(entered) || entered <= 0
-        ? "Enter an amount above zero."
-        : entered > installment.balance + 0.005
+      ? parsedAmount.error
+        ?? (entered > installment.balance + 0.005
           ? `Only ₹${installment.balance.toLocaleString("en-IN")} is outstanding on this installment.`
-          : null
-      : null
-  const settleAll = installment !== null && installment.settleAll && amount.trim() === ""
+          : null)
+      : installment && settleAll && !Number.isInteger(installment.balance)
+        ? "The remaining balance is not a whole rupee amount and cannot be collected as an integer payment."
+        : null
   const effective = settleAll ? installment.balance : entered
 
   async function handleSubmit() {
@@ -199,13 +202,13 @@ export function CollectDialog({ installment, onOpenChange, onCollected }: Collec
             <Input
               id="collectAmount"
               type="number"
-              inputMode="decimal"
-              min="0.01"
-              step="0.01"
+              inputMode="numeric"
+              min="1"
+              step="1"
               max={installment.balance}
               value={amount}
               onChange={(event) => setAmount(event.target.value)}
-              placeholder={installment.balance.toFixed(2)}
+              placeholder={installment.balance.toLocaleString("en-IN")}
               aria-invalid={Boolean(amountError)}
               className={cn("h-11", amountError && "border-destructive")}
             />

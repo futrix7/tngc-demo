@@ -539,6 +539,8 @@ export default function StudentFee() {
         ? null
         : !Number.isFinite(Number(payAmount)) || Number(payAmount) <= 0
           ? "Enter an amount greater than zero."
+          : !Number.isInteger(Number(payAmount))
+            ? "The payment amount must be a whole number of rupees."
           : Number(payAmount) > payingCourse.payable + 0.005
             ? `${payingCourse.name} still owes ₹${payingCourse.payable.toLocaleString("en-IN")}. Enter a figure up to that.`
             : null
@@ -752,10 +754,10 @@ export default function StudentFee() {
                       <Input
                         id="pay-amount"
                         type="number"
-                        inputMode="decimal"
-                        min="0.01"
+                        inputMode="numeric"
+                        min="1"
                         max={payingCourse?.payable}
-                        step="0.01"
+                        step="1"
                         value={payAmount}
                         placeholder="0"
                         aria-label="Amount you are paying"

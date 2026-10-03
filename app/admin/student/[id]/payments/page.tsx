@@ -17,6 +17,7 @@ interface Payment {
   mode: string
   status: string
   for: string
+  course: string
   /** The schedule line this money landed on, when it landed on one. */
   installment: string
 }
@@ -52,7 +53,7 @@ export default function StudentPaymentsPage() {
       setError(null)
 
       const { data: feesRows, error: feesError } = await supabase
-        .from("fees").select("total_fee, paid_amount").eq("student_id", student!.id)
+        .from("fees").select("total_fee").eq("student_id", student!.id)
       if (feesError) {
         console.error("[student payments] fee lookup failed:", feesError.message)
         setError("This student's fee record could not be loaded.")
@@ -61,11 +62,12 @@ export default function StudentPaymentsPage() {
       }
       if (feesRows && feesRows.length > 0) {
         setTotalFee(feesRows.reduce((s, f) => s + (f.total_fee ?? 0), 0))
-        setPaidAmount(feesRows.reduce((s, f) => s + (f.paid_amount ?? 0), 0))
+      } else {
+        setTotalFee(0)
       }
 
       const { data: paymentRows, error: paymentsError } = await supabase
-        .from("payments").select("id, amount, payment_date, method, status, description, installment_id")
+        .from("payments").select("id, amount, payment_date, method, status, description, installment_id, course_slug")
         .eq("student_id", student!.id).order("payment_date", { ascending: false })
 
       if (paymentsError) {
@@ -74,6 +76,9 @@ export default function StudentPaymentsPage() {
         setLoading(false)
         return
       }
+      setPaidAmount((paymentRows ?? [])
+        .filter((payment) => payment.status === "Paid")
+        .reduce((sum, payment) => sum + Number(payment.amount), 0))
 
       // Which schedule line each payment settled. Without it the "Payment For"
       // column showed only the free-text description, which is blank on payments
@@ -82,11 +87,33 @@ export default function StudentPaymentsPage() {
       const installmentIds = [
         ...new Set((paymentRows ?? []).map((row) => row.installment_id).filter(Boolean)),
       ] as string[]
+      const courseSlugs = [
+        ...new Set((paymentRows ?? []).map((row) => row.course_slug).filter(Boolean)),
+      ] as string[]
 
-      const { data: installmentRows } = installmentIds.length
-        ? await supabase.from("fee_installments").select("id, label").in("id", installmentIds)
-        : { data: [] as { id: string; label: string }[] }
+      const [installmentResult, courseResult] = await Promise.all([
+        installmentIds.length
+          ? supabase.from("fee_installments").select("id, label").in("id", installmentIds)
+          : Promise.resolve({ data: [] as { id: string; label: string }[], error: null }),
+        courseSlugs.length
+          ? supabase.from("courses").select("slug, name").in("slug", courseSlugs)
+          : Promise.resolve({ data: [] as { slug: string; name: string }[], error: null }),
+      ])
+      if (installmentResult.error) {
+        console.error("[student payments] installment lookup failed:", installmentResult.error.message)
+        setError("Payment records loaded, but their installment details could not be read.")
+        setLoading(false)
+        return
+      }
+      if (courseResult.error) {
+        console.error("[student payments] course lookup failed:", courseResult.error.message)
+        setError("Payment records loaded, but their course details could not be read.")
+        setLoading(false)
+        return
+      }
+      const installmentRows = installmentResult.data
       const labelById = new Map((installmentRows ?? []).map((row) => [row.id, row.label]))
+      const courseNameBySlug = new Map((courseResult.data ?? []).map((row) => [row.slug, row.name]))
 
       setPayments((paymentRows ?? []).map((p) => ({
         id: p.id,
@@ -95,6 +122,7 @@ export default function StudentPaymentsPage() {
         mode: p.method,
         status: p.status,
         for: p.description ?? "",
+        course: p.course_slug ? courseNameBySlug.get(p.course_slug) ?? p.course_slug : "",
         installment: p.installment_id ? labelById.get(p.installment_id) ?? "" : "",
       })))
 
@@ -149,11 +177,19 @@ export default function StudentPaymentsPage() {
                 <TableRow key={p.id}>
                   <TableCell className="font-medium">
                     {p.installment || p.for || <span className="text-muted-foreground">—</span>}
+                    {p.course && (
+                      <span className="block max-w-64 break-words text-xs font-normal text-muted-foreground">
+                        {p.course}
+                      </span>
+                    )}
                     {p.installment && p.for && (
-                      <span className="block max-w-64 truncate text-xs font-normal text-muted-foreground">
+                      <span className="block max-w-64 break-words text-xs font-normal text-muted-foreground">
                         {p.for}
                       </span>
                     )}
+                    <span className="mt-1 block break-words text-[11px] font-normal text-muted-foreground sm:hidden">
+                      {p.date || "Date unavailable"} · {p.mode || "Method unavailable"}
+                    </span>
                   </TableCell>
                   <TableCell className="hidden sm:table-cell text-muted-foreground">{p.date}</TableCell>
                   <TableCell className="hidden sm:table-cell text-muted-foreground">{p.mode}</TableCell>

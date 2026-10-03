@@ -16,6 +16,14 @@ interface ProfileData {
   joinDate: string
 }
 
+function displayDate(value: string) {
+  if (!value) return "Not provided"
+  const date = new Date(`${value}T00:00:00`)
+  return Number.isNaN(date.getTime())
+    ? value
+    : date.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })
+}
+
 export default function StudentProfilePage() {
   const student = useStudent()
   const [profile, setProfile] = useState<ProfileData | null>(null)
@@ -57,7 +65,7 @@ export default function StudentProfilePage() {
         fatherName: data.father_name ?? "",
         fatherPhone: data.father_phone ?? "",
         motherName: data.mother_name ?? "",
-        joinDate: data.enrollment_date,
+        joinDate: data.enrollment_date ?? "",
       })
       setLoading(false)
     }
@@ -73,33 +81,32 @@ export default function StudentProfilePage() {
       <Card>
         <CardContent className="py-12 text-center">
           <p className="text-sm font-medium">{error ?? "This student's details are unavailable."}</p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            The page above still works — use the other tabs to see fees, payments and installments.
-          </p>
+          <p className="mt-1 text-xs text-muted-foreground">Use the student tabs to view fees, installments, payments, and certificates.</p>
         </CardContent>
       </Card>
     )
   }
 
   return (
-    <div className="grid lg:grid-cols-2 gap-4">
+    <div className="grid min-w-0 gap-4 md:grid-cols-2">
       <Card>
         <CardContent className="p-4 sm:p-5">
-          <h2 className="text-sm sm:text-base font-semibold mb-3">Personal Information</h2>
+          <h2 className="mb-1 text-base font-semibold">Personal information</h2>
+          <p className="mb-3 text-xs text-muted-foreground">Contact and identity details for this student.</p>
           <div className="divide-y divide-border">
             {[
               { icon: Mail, label: "Email", value: student.email },
               { icon: Phone, label: "Phone", value: student.phone },
-              { icon: Calendar, label: "Date of Birth", value: profile.dob },
+              { icon: Calendar, label: "Date of Birth", value: displayDate(profile.dob) },
               { icon: MapPin, label: "Address", value: profile.address },
             ].map((row) => (
-              <div key={row.label} className="flex items-center gap-2.5 sm:gap-3 py-2.5 sm:py-3">
-                <div className="size-8 sm:size-9 rounded-lg bg-muted flex items-center justify-center shrink-0">
+              <div key={row.label} className="flex min-w-0 items-start gap-3 py-3">
+                <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted">
                   <row.icon className="size-4 text-muted-foreground" />
                 </div>
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1">
                   <p className="text-[11px] text-muted-foreground">{row.label}</p>
-                  <p className="text-xs sm:text-sm truncate">{row.value}</p>
+                  <p className="break-words text-sm">{row.value || "Not provided"}</p>
                 </div>
               </div>
             ))}
@@ -109,45 +116,74 @@ export default function StudentProfilePage() {
 
       <Card>
         <CardContent className="p-4 sm:p-5">
-          <h2 className="text-sm sm:text-base font-semibold mb-3">Course Details</h2>
+          <h2 className="mb-1 text-base font-semibold">Course details</h2>
+          <p className="mb-3 text-xs text-muted-foreground">Enrollment and class information.</p>
           <div className="divide-y divide-border">
             {[
-              { icon: BookOpen, label: "Course", value: student.course },
               { icon: MapPin, label: "Branch", value: student.branch },
-              { icon: Calendar, label: "Join Date", value: profile.joinDate },
+              { icon: Calendar, label: "Join Date", value: displayDate(profile.joinDate) },
               { icon: UserCircle, label: "Batch Time", value: profile.batchTime },
             ].map((row) => (
-              <div key={row.label} className="flex items-center gap-2.5 sm:gap-3 py-2.5 sm:py-3">
-                <div className="size-8 sm:size-9 rounded-lg bg-muted flex items-center justify-center shrink-0">
+              <div key={row.label} className="flex min-w-0 items-start gap-3 py-3">
+                <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted">
                   <row.icon className="size-4 text-muted-foreground" />
                 </div>
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1">
                   <p className="text-[11px] text-muted-foreground">{row.label}</p>
-                  <p className="text-xs sm:text-sm truncate">{row.value}</p>
+                  <p className="break-words text-sm">{row.value || "Not provided"}</p>
                 </div>
               </div>
             ))}
+            <div className="flex min-w-0 items-start gap-3 py-3">
+              <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted">
+                <BookOpen className="size-4 text-muted-foreground" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-[11px] text-muted-foreground">Courses</p>
+                <div className="mt-1 flex flex-wrap gap-1.5">
+                  {student.courses.length > 0
+                    ? student.courses.map((course) => (
+                      <span key={course} className="max-w-full rounded-md bg-secondary px-2 py-1 text-xs leading-snug text-secondary-foreground [overflow-wrap:anywhere]">
+                        {course}
+                      </span>
+                    ))
+                    : <span className="text-sm text-muted-foreground">No course on file</span>}
+                </div>
+              </div>
+            </div>
+            {student.previousCourse && (
+              <div className="flex min-w-0 items-start gap-3 py-3">
+                <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted">
+                  <BookOpen className="size-4 text-muted-foreground" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[11px] text-muted-foreground">Previous course (CSV; historical only)</p>
+                  <p className="break-words text-sm">{student.previousCourse}</p>
+                </div>
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>
 
-      <Card className="lg:col-span-2">
+      <Card className="md:col-span-2">
         <CardContent className="p-4 sm:p-5">
-          <h2 className="text-sm sm:text-base font-semibold mb-3">Parent / Guardian</h2>
-          <div className="grid sm:grid-cols-3 gap-1 sm:gap-4 divide-y sm:divide-y-0 divide-border">
+          <h2 className="mb-1 text-base font-semibold">Parent / guardian</h2>
+          <p className="mb-3 text-xs text-muted-foreground">Optional family and emergency contact information.</p>
+          <div className="grid divide-y divide-border sm:grid-cols-2 sm:divide-y-0 lg:grid-cols-3">
             {[
               { icon: UserCircle, label: "Father's Name", value: profile.fatherName },
               { icon: Phone, label: "Father's Phone", value: profile.fatherPhone },
               { icon: UserCircle, label: "Mother's Name", value: profile.motherName },
             ].map((row) => (
-              <div key={row.label} className="sm:px-4 first:sm:pl-0 py-2.5 sm:py-0">
-                <div className="flex items-center gap-2.5 sm:gap-3">
-                  <div className="size-8 sm:size-9 rounded-lg bg-muted flex items-center justify-center shrink-0">
+              <div key={row.label} className="min-w-0 py-3 sm:px-3 sm:py-2 first:sm:pl-0">
+                <div className="flex min-w-0 items-start gap-3">
+                  <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted">
                     <row.icon className="size-4 text-muted-foreground" />
                   </div>
                   <div className="min-w-0">
                     <p className="text-[11px] text-muted-foreground">{row.label}</p>
-                    <p className="text-xs sm:text-sm truncate">{row.value}</p>
+                    <p className="break-words text-sm">{row.value || "Not provided"}</p>
                   </div>
                 </div>
               </div>

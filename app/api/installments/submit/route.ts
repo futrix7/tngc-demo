@@ -6,7 +6,7 @@ import {
 } from "@/lib/supabase-admin"
 import { checkRate, RateLimiterUnavailableError } from "@/lib/rate-limit"
 import { describeRpcFailure, failureResponse } from "@/lib/api-response"
-import { parseSingleAmount } from "@/lib/amount-split"
+import { parsePaymentAmount } from "@/lib/amount-split"
 
 const MAX_ATTEMPTS = 20
 const WINDOW_MS = 60 * 60 * 1000
@@ -74,7 +74,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Choose a course to pay towards." }, { status: 400 })
   }
 
-  const claimed = parseSingleAmount(body.amount)
+  const claimed = parsePaymentAmount(body.amount)
   if (claimed.error || claimed.amount === null) {
     return NextResponse.json(
       { error: claimed.error ?? "Enter the amount you are paying." },

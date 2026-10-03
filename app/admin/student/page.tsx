@@ -35,6 +35,9 @@ import { cn } from "@/lib/utils";
 import { supabase } from "@/lib/supabase";
 import { AddStudentSheet } from "@/components/admin/add-student-sheet";
 import { FilterDialog, type FilterField, type FilterValues } from "@/components/admin/filter-dialog";
+import { LegacyStudentsTable } from "@/components/admin/legacy-students-table";
+import { DeactivatedStudentsTable } from "@/components/admin/deactivated-students-table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 interface Student {
   id: string;
@@ -43,7 +46,7 @@ interface Student {
   branch: string;
   phone: string;
   enrollmentDate: string;
-  status: "Active" | "Inactive" | "Pending";
+  status: "Active" | "Inactive" | "Pending" | null;
 }
 
 interface Stats {
@@ -53,7 +56,7 @@ interface Stats {
 }
 
 const statusVariant: Record<
-  Student["status"],
+  Exclude<Student["status"], null>,
   "default" | "secondary" | "destructive" | "outline"
 > = {
   Active: "default",
@@ -68,18 +71,12 @@ function sanitizeStudentSearch(value: string) {
 export default function AdminStudentsPage() {
   const [students, setStudents] = useState<Student[]>([]);
   const [loading, setLoading] = useState(true);
-  /**
-   * The full-page spinner is for the *first* load only. Every later fetch — a
-   * debounced keystroke, a filter change, a page change — keeps the rows that
-   * are already on screen and dims them instead, because blanking the whole
-   * table on every character typed made the search box feel broken.
-   */
-  const [initialLoading, setInitialLoading] = useState(true);
+  const [pageLoading, setPageLoading] = useState<"previous" | "next" | null>(null);
   const [stats, setStats] = useState<Stats[]>([
     { label: "Total Students", value: 0, color: "text-foreground" },
     { label: "Active", value: 0, color: "text-emerald-600 dark:text-emerald-400" },
     { label: "Pending", value: 0, color: "text-amber-600 dark:text-amber-400" },
-    { label: "Inactive", value: 0, color: "text-red-600 dark:text-red-400" },
+    { label: "Deactivated", value: 0, color: "text-red-600 dark:text-red-400" },
   ]);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -100,6 +97,8 @@ export default function AdminStudentsPage() {
     let query = supabase
       .from("students")
       .select("id, full_name, email, phone, enrollment_date, status, course_slug, branch_id", { count: "exact" })
+      .eq("is_legacy_import", false)
+      .neq("status", "Inactive")
       .order("created_at", { ascending: false });
 
     const safeTerm = sanitizeStudentSearch(term);
@@ -116,9 +115,11 @@ export default function AdminStudentsPage() {
 
     if (error) {
       console.error("Error fetching students:", error);
-      if (activeRequest === requestId.current) setStudents([]);
-      setLoading(false);
-      setInitialLoading(false);
+      if (activeRequest === requestId.current) {
+        setStudents([]);
+        setLoading(false);
+        setPageLoading(null);
+      }
       return false;
     }
 
@@ -156,14 +157,14 @@ export default function AdminStudentsPage() {
       course: s.course_slug ? coursesMap[s.course_slug] ?? s.course_slug : "",
       branch: s.branch_id ? branchesMap[s.branch_id] ?? s.branch_id : "",
       phone: s.phone,
-      enrollmentDate: s.enrollment_date,
-      status: s.status as Student["status"],
+      enrollmentDate: s.enrollment_date ?? "",
+      status: s.status,
     }));
 
     setStudents(mapped);
     setTotalCount(count ?? 0);
     setLoading(false);
-    setInitialLoading(false);
+    setPageLoading(null);
     return true;
   }, []);
 
@@ -183,17 +184,18 @@ export default function AdminStudentsPage() {
     async function fetchDirectoryStats() {
       const [coursesResult, totalResult, activeResult, pendingResult, inactiveResult] = await Promise.all([
         supabase.from("courses").select("slug, name").order("name"),
-        supabase.from("students").select("id", { count: "exact", head: true }),
-        supabase.from("students").select("id", { count: "exact", head: true }).eq("status", "Active"),
-        supabase.from("students").select("id", { count: "exact", head: true }).eq("status", "Pending"),
-        supabase.from("students").select("id", { count: "exact", head: true }).eq("status", "Inactive"),
+        supabase.from("students").select("id", { count: "exact", head: true })
+          .eq("is_legacy_import", false).neq("status", "Inactive"),
+        supabase.from("students").select("id", { count: "exact", head: true }).eq("is_legacy_import", false).eq("status", "Active"),
+        supabase.from("students").select("id", { count: "exact", head: true }).eq("is_legacy_import", false).eq("status", "Pending"),
+        supabase.from("students").select("id", { count: "exact", head: true }).eq("is_legacy_import", false).eq("status", "Inactive"),
       ]);
       setCourses(coursesResult.data ?? []);
       setStats([
         { label: "Total Students", value: totalResult.count ?? 0, color: "text-foreground" },
         { label: "Active", value: activeResult.count ?? 0, color: "text-emerald-600 dark:text-emerald-400" },
         { label: "Pending", value: pendingResult.count ?? 0, color: "text-amber-600 dark:text-amber-400" },
-        { label: "Inactive", value: inactiveResult.count ?? 0, color: "text-red-600 dark:text-red-400" },
+        { label: "Deactivated", value: inactiveResult.count ?? 0, color: "text-red-600 dark:text-red-400" },
       ]);
     }
     fetchDirectoryStats();
@@ -211,7 +213,6 @@ export default function AdminStudentsPage() {
         { value: "all", label: "All statuses" },
         { value: "Active", label: "Active" },
         { value: "Pending", label: "Pending" },
-        { value: "Inactive", label: "Inactive" },
       ],
     },
     {
@@ -231,6 +232,7 @@ export default function AdminStudentsPage() {
     const nextCourse = values.course || "all";
     const request = { currentPage: 1, search, statusFilter: nextStatus, courseFilter: nextCourse };
     manualFetchKey.current = JSON.stringify(request);
+    setLoading(true);
     setStatusFilter(nextStatus);
     setCourseFilter(nextCourse);
     setCurrentPage(1);
@@ -240,7 +242,7 @@ export default function AdminStudentsPage() {
   async function handleExport() {
     setExporting(true);
     const safeTerm = sanitizeStudentSearch(search);
-    const rows: { id: string; full_name: string; email: string; phone: string; course_slug: string | null; branch_id: string | null; enrollment_date: string; status: string }[] = [];
+    const rows: { id: string; full_name: string; email: string | null; phone: string; course_slug: string | null; branch_id: string | null; enrollment_date: string | null; status: string }[] = [];
     let offset = 0;
 
     try {
@@ -248,6 +250,8 @@ export default function AdminStudentsPage() {
         let query = supabase
           .from("students")
           .select("id, full_name, email, phone, course_slug, branch_id, enrollment_date, status")
+          .eq("is_legacy_import", false)
+          .neq("status", "Inactive")
           .order("created_at", { ascending: false });
         if (safeTerm) query = query.or(`full_name.ilike.%${safeTerm}%,email.ilike.%${safeTerm}%,phone.ilike.%${safeTerm}%,id.ilike.%${safeTerm}%`);
         if (statusFilter !== "all") query = query.eq("status", statusFilter);
@@ -277,7 +281,7 @@ export default function AdminStudentsPage() {
         row.phone,
         courses.find((item) => item.slug === row.course_slug)?.name ?? row.course_slug ?? "",
         branchNames.get(row.branch_id ?? "") ?? "",
-        row.enrollment_date,
+        row.enrollment_date ?? "",
         row.status,
       ])].map((line) => line.map(csvCell).join(",")).join("\r\n");
       const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
@@ -291,14 +295,6 @@ export default function AdminStudentsPage() {
     } finally {
       setExporting(false);
     }
-  }
-
-  if (initialLoading) {
-    return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-      </div>
-    );
   }
 
   return (
@@ -329,6 +325,13 @@ export default function AdminStudentsPage() {
         ))}
       </div>
 
+      <Tabs defaultValue="registered" className="w-full">
+        <TabsList className="grid w-full grid-cols-3 sm:w-fit">
+          <TabsTrigger value="registered">Registered students</TabsTrigger>
+          <TabsTrigger value="deactivated">Deactivated</TabsTrigger>
+          <TabsTrigger value="legacy">CSV imports</TabsTrigger>
+        </TabsList>
+        <TabsContent value="registered">
       {/* Toolbar */}
       <Card>
         <CardHeader>
@@ -336,9 +339,6 @@ export default function AdminStudentsPage() {
             <div>
               <CardTitle className="flex items-center gap-2">
                 Student Directory
-                {loading && (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" aria-label="Updating" />
-                )}
               </CardTitle>
               <CardDescription>
                 Showing {students.length} of {totalCount.toLocaleString()} matching students
@@ -351,6 +351,8 @@ export default function AdminStudentsPage() {
                   placeholder="Search name, phone, email, ID..."
                   value={search}
                   onChange={(e) => {
+                    setLoading(true)
+                    setPageLoading(null)
                     setSearch(e.target.value)
                     setCurrentPage(1)
                   }}
@@ -375,7 +377,7 @@ export default function AdminStudentsPage() {
 
         {/* Students Table */}
         <CardContent>
-          <Table>
+          <Table aria-busy={loading}>
             <TableHeader>
               <TableRow>
                 <TableHead>Student ID</TableHead>
@@ -391,7 +393,26 @@ export default function AdminStudentsPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {students.map((student) => (
+              {loading ? Array.from({ length: studentsPerPage }, (_, rowIndex) => (
+                <TableRow key={`student-skeleton-${rowIndex}`} aria-hidden="true">
+                  <TableCell><div className="h-4 w-20 animate-pulse rounded bg-muted" /></TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-3">
+                      <div className="size-8 shrink-0 animate-pulse rounded-full bg-muted" />
+                      <div className="space-y-2">
+                        <div className="h-4 w-32 animate-pulse rounded bg-muted" />
+                        <div className="h-3 w-20 animate-pulse rounded bg-muted sm:hidden" />
+                      </div>
+                    </div>
+                  </TableCell>
+                  <TableCell className="hidden md:table-cell"><div className="h-4 w-28 animate-pulse rounded bg-muted" /></TableCell>
+                  <TableCell className="hidden lg:table-cell"><div className="h-4 w-24 animate-pulse rounded bg-muted" /></TableCell>
+                  <TableCell className="hidden sm:table-cell"><div className="h-4 w-24 animate-pulse rounded bg-muted" /></TableCell>
+                  <TableCell className="hidden lg:table-cell"><div className="h-4 w-24 animate-pulse rounded bg-muted" /></TableCell>
+                  <TableCell><div className="h-6 w-16 animate-pulse rounded-full bg-muted" /></TableCell>
+                  <TableCell><div className="ml-auto size-8 animate-pulse rounded bg-muted" /></TableCell>
+                </TableRow>
+              )) : students.map((student) => (
                 <TableRow key={student.id} className="cursor-pointer hover:bg-muted/50">
                   <TableCell className="font-mono text-xs">
                     <Link href={`/admin/student/${student.id}/profile`} className="block">
@@ -437,8 +458,8 @@ export default function AdminStudentsPage() {
                     </Link>
                   </TableCell>
                   <TableCell>
-                    <Badge variant={statusVariant[student.status]}>
-                      {student.status}
+                    <Badge variant={student.status ? statusVariant[student.status] : "outline"}>
+                      {student.status ?? "Not set"}
                     </Badge>
                   </TableCell>
                   <TableCell>
@@ -450,7 +471,7 @@ export default function AdminStudentsPage() {
                   </TableCell>
                 </TableRow>
               ))}
-              {students.length === 0 && (
+              {!loading && students.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={8} className="h-24 text-center">
                     <p className="text-muted-foreground">
@@ -472,24 +493,48 @@ export default function AdminStudentsPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-              disabled={currentPage === 1}
+              onClick={() => {
+                setLoading(true);
+                setPageLoading("previous");
+                setCurrentPage((p) => Math.max(1, p - 1));
+              }}
+              disabled={currentPage === 1 || loading || pageLoading !== null}
             >
-              <ChevronLeft className="h-4 w-4" />
+              <span className="inline-flex size-4 items-center justify-center" aria-hidden="true">
+                {pageLoading === "previous"
+                  ? <Loader2 className="size-4 animate-spin" />
+                  : <ChevronLeft className="size-4" />}
+              </span>
               Previous
             </Button>
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-              disabled={currentPage === totalPages || totalPages === 0}
+              onClick={() => {
+                setLoading(true);
+                setPageLoading("next");
+                setCurrentPage((p) => Math.min(totalPages, p + 1));
+              }}
+              disabled={currentPage === totalPages || totalPages === 0 || loading || pageLoading !== null}
             >
               Next
-              <ChevronRight className="h-4 w-4" />
+              <span className="inline-flex size-4 items-center justify-center" aria-hidden="true">
+                {pageLoading === "next"
+                  ? <Loader2 className="size-4 animate-spin" />
+                  : <ChevronRight className="size-4" />}
+              </span>
             </Button>
           </div>
         </CardFooter>
       </Card>
+        </TabsContent>
+        <TabsContent value="deactivated">
+          <DeactivatedStudentsTable />
+        </TabsContent>
+        <TabsContent value="legacy">
+          <LegacyStudentsTable />
+        </TabsContent>
+      </Tabs>
       <AddStudentSheet
         open={addOpen}
         onOpenChange={setAddOpen}

@@ -155,8 +155,9 @@ export type StudentAuthResult =
  * file a payment claim against another student — the RPC would faithfully check
  * ownership against whatever identity it was handed.
  *
- * A session that is not linked to a students row is a 403, not a 404: the
- * account exists and is signed in, it just has no enrolment behind it.
+ * A session without an active student row is a 403, not a 404: the account
+ * exists and is signed in, but cannot use student self-service while unlinked
+ * or deactivated.
  */
 export async function authenticateStudentRequest(request: Request): Promise<StudentAuthResult> {
   if (!isSupabaseAdminConfigured) {
@@ -179,7 +180,7 @@ export async function authenticateStudentRequest(request: Request): Promise<Stud
 
   const { data: student, error: studentError } = await supabaseAdmin
     .from("students")
-    .select("id")
+    .select("id, status")
     .eq("user_id", data.user.id)
     .maybeSingle()
 
@@ -193,6 +194,13 @@ export async function authenticateStudentRequest(request: Request): Promise<Stud
       ok: false,
       status: 403,
       error: "No student enrollment is linked to this account.",
+    }
+  }
+  if (student.status === "Inactive") {
+    return {
+      ok: false,
+      status: 403,
+      error: "This student account is deactivated. Contact the institute to reactivate it.",
     }
   }
 

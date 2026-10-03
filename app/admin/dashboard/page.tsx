@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -18,9 +18,10 @@ import {
   Banknote,
   ListChecks,
   Clock,
+  type LucideIcon,
 } from "lucide-react";
-import { supabase } from "@/lib/supabase";
 import { tooltipStyle, axisStyle, gridStyle } from "@/lib/chart-theme";
+import { useAuthState } from "@/hooks/use-auth";
 
 const statusVariant: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   paid: "default",
@@ -32,271 +33,130 @@ const statusVariant: Record<string, "default" | "secondary" | "destructive" | "o
   waitlisted: "outline",
 };
 
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
 /** Days shown on the daily collection chart. */
 const DAILY_WINDOW = 14;
 
-function formatDate(dateStr: string): string {
-  const parts = dateStr.split("T")[0].split("-");
-  if (parts.length === 3) {
-    const [year, month, day] = parts.map(Number);
-    return `${String(day).padStart(2, "0")} ${MONTHS[month - 1]} ${year}`;
-  }
-  const d = new Date(dateStr);
-  return `${String(d.getDate()).padStart(2, "0")} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
-}
-
-function getLocalDateStr(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-}
-
-function getMonthKey(date: Date): string {
-  return `${date.getFullYear()}-${date.getMonth()}`;
-}
-
-/** Date columns come back as `YYYY-MM-DD`; compare them as text, never via `new Date`. */
-function dayOf(value: string | null | undefined): string {
-  return (value ?? "").slice(0, 10);
-}
-
-function formatTime(value: string | null | undefined): string {
-  if (!value) return "—";
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
-}
-
-function getSafeRows<T>(result: { data: T[] | null; error: { message?: string } | null }, label: string): T[] {
-  if (result.error) {
-    console.error(`[admin dashboard] ${label} query failed:`, result.error.message || result.error);
-    return [];
-  }
-
-  return result.data ?? [];
-}
-
-const STATUS_MAP: Record<string, string> = {
-  Active: "confirmed",
-  Pending: "pending",
-  Inactive: "waitlisted",
+type GlanceRow = {
+  label: string;
+  value: string;
+  icon: LucideIcon;
 };
 
-type GlanceRow = { label: string; value: string; icon: typeof Users };
+type DashboardData = {
+  totalStudents: number;
+  studentGrowth: string;
+  activeCourses: number;
+  newCoursesThisQuarter: number;
+  feeSnapshot: { collectedThisMonth: number; outstanding: number; dueSoon: number };
+  todayStats: {
+    admissions: number;
+    collected: number;
+    collectedCount: number;
+    spent: number;
+    pendingClaims: number;
+    pendingFiledToday: number;
+    overdue: number;
+  };
+  dailyCollections: { day: string; label: string; amount: number }[];
+  enrollmentTrends: { month: string; students: number }[];
+  courseEnrollment: { course: string; enrollments: number }[];
+  recentEnrollments: {
+    id: string;
+    name: string;
+    course: string;
+    branch: string;
+    date: string;
+    status: string;
+  }[];
+  todaysPayments: {
+    key: string;
+    name: string;
+    amount: number;
+    method: string;
+    status: string;
+    time: string;
+  }[];
+};
 
 export default function AdminDashboardPage() {
   const router = useRouter();
-  const [loading, setLoading] = useState(true);
-  const [totalStudents, setTotalStudents] = useState(0);
-  const [studentGrowth, setStudentGrowth] = useState("");
-  const [activeCourses, setActiveCourses] = useState(0);
-  const [newCoursesThisQuarter, setNewCoursesThisQuarter] = useState(0);
-  const [feeSnapshot, setFeeSnapshot] = useState({ collectedThisMonth: 0, outstanding: 0, dueSoon: 0 });
-  const [todayStats, setTodayStats] = useState({
-    admissions: 0,
-    collected: 0,
-    collectedCount: 0,
-    spent: 0,
-    pendingClaims: 0,
-    pendingFiledToday: 0,
-    overdue: 0,
-  });
-  const [dailyCollections, setDailyCollections] = useState<{ day: string; label: string; amount: number }[]>([]);
-  const [enrollmentTrends, setEnrollmentTrends] = useState<{ month: string; students: number }[]>([]);
-  const [courseEnrollment, setCourseEnrollment] = useState<{ course: string; enrollments: number }[]>([]);
-  const [recentEnrollments, setRecentEnrollments] = useState<
-    { name: string; course: string; branch: string; date: string; status: string }[]
-  >([]);
-  const [todaysPayments, setTodaysPayments] = useState<
-    { key: string; name: string; amount: number; method: string; status: string; time: string }[]
-  >([]);
+  const { session, loading } = useAuthState();
+  const [data, setData] = useState<DashboardData | null>(null);
+  const [dashboardLoading, setDashboardLoading] = useState(true);
+  const [dashboardError, setDashboardError] = useState("");
 
-  async function fetchDashboardData() {
+  const fetchDashboardData = useCallback(async () => {
+    const accessToken = session?.access_token;
+    if (!accessToken) return;
     try {
-      const now = new Date();
-      const todayStr = getLocalDateStr(now);
-      const thisMonth = now.getMonth();
-      const thisYear = now.getFullYear();
-
-      const [studentsRes, coursesRes, paymentsRes, branchesRes, feesRes, installmentsRes, transactionsRes] =
-        await Promise.all([
-          supabase.from("students").select("id, full_name, course_slug, branch_id, enrollment_date, status"),
-          supabase.from("courses").select("id, slug, name, created_at, status"),
-          supabase
-            .from("payments")
-            .select("id, student_id, student_name, amount, status, method, payment_date, created_at"),
-          supabase.from("branches").select("id, name"),
-          supabase.from("fees").select("total_fee, paid_amount, pending_amount"),
-          supabase.from("fee_installments").select("amount, due_date, status"),
-          supabase.from("transactions").select("amount, type, date"),
-        ]);
-
-      const students = getSafeRows(studentsRes, "students");
-      const courses = getSafeRows(coursesRes, "courses");
-      const payments = getSafeRows(paymentsRes, "payments");
-      const branches = getSafeRows(branchesRes, "branches");
-      const fees = getSafeRows(feesRes, "fees");
-      const installments = getSafeRows(installmentsRes, "fee installments");
-      const transactions = getSafeRows(transactionsRes, "transactions");
-
-      const branchMap = new Map(branches.map((b) => [b.id, b.name]));
-      const courseMap = new Map(courses.map((c) => [c.slug, c.name]));
-
-      // --- Stat Cards ---
-      setTotalStudents(students.length);
-
-      const thisMonthCount = students.filter((s) => {
-        const d = new Date(s.enrollment_date);
-        return d.getMonth() === thisMonth && d.getFullYear() === thisYear;
-      }).length;
-      const lastMonth = thisMonth === 0 ? 11 : thisMonth - 1;
-      const lastMonthYear = thisMonth === 0 ? thisYear - 1 : thisYear;
-      const lastMonthCount = students.filter((s) => {
-        const d = new Date(s.enrollment_date);
-        return d.getMonth() === lastMonth && d.getFullYear() === lastMonthYear;
-      }).length;
-      const growthPct = lastMonthCount > 0 ? Math.round(((thisMonthCount - lastMonthCount) / lastMonthCount) * 100) : 0;
-      setStudentGrowth(`${growthPct >= 0 ? "+" : ""}${growthPct}% from last month`);
-
-      const activeCourseList = courses.filter((c) => c.status === "active");
-      setActiveCourses(activeCourseList.length);
-      const quarterStart = new Date(thisYear, Math.floor(thisMonth / 3) * 3, 1);
-      const newCourses = courses.filter((c) => new Date(c.created_at) >= quarterStart);
-      setNewCoursesThisQuarter(newCourses.length);
-
-      // --- Today ---
-      const admissionsToday = students.filter((s) => dayOf(s.enrollment_date) === todayStr).length;
-
-      const todaysRows = payments.filter((p) => dayOf(p.payment_date) === todayStr);
-      const collectedToday = todaysRows
-        .filter((p) => p.status === "Paid")
-        .reduce((sum, p) => sum + Number(p.amount), 0);
-      const pendingFiledToday = todaysRows.filter((p) => p.status === "Pending").length;
-      const pendingClaims = payments.filter((p) => p.status === "Pending").length;
-      const spentToday = transactions
-        .filter((t) => t.type === "expense" && dayOf(t.date) === todayStr)
-        .reduce((sum, t) => sum + Number(t.amount), 0);
-
-      const dueThrough = new Date(now);
-      dueThrough.setDate(dueThrough.getDate() + 7);
-      const dueThroughStr = getLocalDateStr(dueThrough);
-      const dueSoon = installments
-        .filter(
-          (installment) =>
-            installment.status !== "Paid" && installment.due_date >= todayStr && installment.due_date <= dueThroughStr
-        )
-        .reduce((sum, installment) => sum + Number(installment.amount), 0);
-      const overdue = installments
-        .filter((installment) => installment.status !== "Paid" && dayOf(installment.due_date) < todayStr)
-        .reduce((sum, installment) => sum + Number(installment.amount), 0);
-
-      setTodayStats({
-        admissions: admissionsToday,
-        collected: collectedToday,
-        collectedCount: todaysRows.filter((p) => p.status === "Paid").length,
-        spent: spentToday,
-        pendingClaims,
-        pendingFiledToday,
-        overdue,
+      const res = await fetch("/api/admin/dashboard", {
+        cache: "no-store",
+        headers: { Authorization: `Bearer ${session.access_token}` },
       });
-
-      // --- Month totals behind the money cards ---
-      const monthKey = `${thisYear}-${String(thisMonth + 1).padStart(2, "0")}`;
-      const collectedThisMonth = payments
-        .filter((payment) => payment.status === "Paid" && payment.payment_date?.startsWith(monthKey))
-        .reduce((sum, payment) => sum + Number(payment.amount), 0);
-      const outstanding = fees.reduce(
-        (sum, fee) => sum + Number(fee.pending_amount ?? Math.max(0, fee.total_fee - fee.paid_amount)),
-        0
-      );
-      setFeeSnapshot({ collectedThisMonth, outstanding, dueSoon });
-
-      // --- Daily collections (last 14 days) ---
-      const dailySeries: { day: string; label: string; amount: number }[] = [];
-      for (let i = DAILY_WINDOW - 1; i >= 0; i--) {
-        const d = new Date(now);
-        d.setDate(d.getDate() - i);
-        const key = getLocalDateStr(d);
-        const amount = payments
-          .filter((p) => p.status === "Paid" && dayOf(p.payment_date) === key)
-          .reduce((sum, p) => sum + Number(p.amount), 0);
-        dailySeries.push({
-          day: String(d.getDate()),
-          label: `${String(d.getDate()).padStart(2, "0")} ${MONTHS[d.getMonth()]}`,
-          amount,
-        });
+      if (!res.ok) {
+        const result = await res.json().catch(() => null) as { error?: string } | null;
+        throw new Error(result?.error ?? "Failed to load dashboard data.");
       }
-      setDailyCollections(dailySeries);
-
-      // --- Enrollment Trends (last 6 months) ---
-      const monthLabels: { label: string; key: string }[] = [];
-      for (let i = 5; i >= 0; i--) {
-        const d = new Date(thisYear, thisMonth - i, 1);
-        monthLabels.push({ label: MONTHS[d.getMonth()], key: getMonthKey(d) });
+      const json: unknown = await res.json();
+      if (!json || typeof json !== "object" || Array.isArray(json)) {
+        throw new Error("The dashboard returned an empty or invalid response.");
       }
-      const trends = monthLabels.map(({ label, key }) => {
-        const count = students.filter((s) => {
-          const ed = new Date(s.enrollment_date);
-          return getMonthKey(ed) === key;
-        }).length;
-        return { month: label, students: count };
-      });
-      setEnrollmentTrends(trends);
-
-      // --- Course Enrollment ---
-      const courseCountMap = new Map<string, number>();
-      students.forEach((s) => {
-        if (s.course_slug) {
-          courseCountMap.set(s.course_slug, (courseCountMap.get(s.course_slug) || 0) + 1);
-        }
-      });
-      const courseEnrollData = Array.from(courseCountMap.entries())
-        .map(([slug, count]) => ({
-          course: courseMap.get(slug) || slug,
-          enrollments: count,
-        }))
-        .sort((a, b) => b.enrollments - a.enrollments)
-        .slice(0, 6);
-      setCourseEnrollment(courseEnrollData);
-
-      // --- Recent Enrollments ---
-      const recent = [...students]
-        .sort((a, b) => new Date(b.enrollment_date).getTime() - new Date(a.enrollment_date).getTime())
-        .slice(0, 5)
-        .map((s) => ({
-          name: s.full_name,
-          course: courseMap.get(s.course_slug || "") || s.course_slug || "N/A",
-          branch: branchMap.get(s.branch_id || "") || "N/A",
-          date: formatDate(s.enrollment_date),
-          status: STATUS_MAP[s.status] || s.status.toLowerCase(),
-        }));
-      setRecentEnrollments(recent);
-
-      // --- Payments received today ---
-      setTodaysPayments(
-        [...todaysRows]
-          .sort((a, b) => new Date(b.created_at ?? 0).getTime() - new Date(a.created_at ?? 0).getTime())
-          .slice(0, 6)
-          .map((p, index) => ({
-            key: `${p.id}-${index}`,
-            name: p.student_name,
-            amount: Number(p.amount),
-            method: (p.method || "cash").toUpperCase(),
-            status: p.status.toLowerCase(),
-            time: formatTime(p.created_at),
-          }))
-      );
+      setData(json as DashboardData);
+      setDashboardError("");
     } catch (error) {
       console.error("Error fetching dashboard data:", error);
+      setDashboardError(error instanceof Error ? error.message : "Failed to load dashboard data.");
     } finally {
-      setLoading(false);
+      setDashboardLoading(false);
     }
-  }
+  }, [session]);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- mount-time data fetch
-    fetchDashboardData();
-  }, []);
+    if (!loading && session?.access_token) {
+      void Promise.resolve().then(fetchDashboardData);
+    }
+  }, [fetchDashboardData, loading, session]);
+
+  if (loading || !session?.access_token) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (dashboardLoading && !data) {
+    return (
+      <div className="flex h-64 items-center justify-center">
+        <Loader2 className="size-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (!data) {
+    return (
+      <Card>
+        <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
+          <p className="text-sm text-muted-foreground">
+            {dashboardError || "Dashboard data is unavailable."}
+          </p>
+          <Button
+            onClick={() => {
+              setDashboardLoading(true);
+              setDashboardError("");
+              void fetchDashboardData();
+            }}
+            disabled={dashboardLoading}
+          >
+            {dashboardLoading && <Loader2 className="mr-2 size-4 animate-spin" />}
+            Try again
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const { totalStudents, studentGrowth, activeCourses, newCoursesThisQuarter, feeSnapshot, todayStats, dailyCollections, enrollmentTrends, courseEnrollment, recentEnrollments, todaysPayments } = data;
 
   const statCards = [
     {
@@ -381,14 +241,6 @@ export default function AdminDashboardPage() {
       icon: Wallet,
     },
   ];
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-      </div>
-    );
-  }
 
   return (
     <div className="space-y-6">
@@ -565,7 +417,7 @@ export default function AdminDashboardPage() {
                   <tbody>
                     {recentEnrollments.map((enrollment) => (
                       <tr
-                        key={`${enrollment.name}-${enrollment.date}`}
+                        key={enrollment.id}
                         className="border-b last:border-0"
                       >
                         <td className="py-3 pr-4">
@@ -589,7 +441,7 @@ export default function AdminDashboardPage() {
                           {enrollment.date}
                         </td>
                         <td className="py-3 text-right">
-                          <Badge variant={statusVariant[enrollment.status]}>
+                          <Badge variant={statusVariant[enrollment.status] ?? "outline"}>
                             {enrollment.status}
                           </Badge>
                         </td>

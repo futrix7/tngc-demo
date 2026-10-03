@@ -52,7 +52,7 @@ export async function POST(request: Request) {
 
   const { data: student, error: studentError } = await supabaseAdmin
     .from("students")
-    .select("id, user_id, full_name, phone")
+    .select("id, user_id, full_name, phone, status")
     .eq("id", studentId)
     .maybeSingle()
 
@@ -63,6 +63,9 @@ export async function POST(request: Request) {
 
   if (!student) {
     return NextResponse.json({ error: "Student not found." }, { status: 404 })
+  }
+  if (student.status === "Inactive") {
+    return NextResponse.json({ error: "Activate this student before changing their login." }, { status: 409 })
   }
 
   const normalizedPhone = normalizeIndianPhone(student.phone)

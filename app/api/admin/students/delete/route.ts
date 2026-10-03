@@ -5,8 +5,7 @@ import {
   supabaseAdmin,
 } from "@/lib/supabase-admin"
 
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const STUDENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/
 
 /**
  * Removes a student and everything attached to them.
@@ -54,7 +53,7 @@ export async function POST(request: Request) {
   }
 
   const studentId = typeof body.studentId === "string" ? body.studentId.trim() : ""
-  if (!UUID_PATTERN.test(studentId)) {
+  if (!STUDENT_ID_PATTERN.test(studentId)) {
     return NextResponse.json({ error: "That student could not be identified." }, { status: 400 })
   }
 

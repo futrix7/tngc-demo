@@ -37,12 +37,16 @@ import {
   SelectContent,
   SelectItem,
 } from "@/components/ui/select"
-import { Search, Award, CheckCircle2, Clock, Send, Loader2 } from "lucide-react"
+import { Search, Award, CheckCircle2, Clock, Send, Loader2, Eye, Printer } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { supabase } from "@/lib/supabase"
 import { useToast } from "@/components/ui/sonner"
 import { mintId } from "@/lib/mint-id"
 import { localDate } from "@/lib/local-date"
+import { createCertificateHtml, printCertificate, type PrintableCertificate } from "@/lib/certificate-print"
+
+const DIVISION_OPTIONS = ["First", "Second", "Third"] as const
+const CUSTOM_DIVISION_OPTION = "__custom_division__"
 
 interface Certificate {
   id: string
@@ -53,11 +57,13 @@ interface Certificate {
   issuedDate: string
   credentialId: string
   status: "Issued" | "Pending" | "Rejected" | "Processing" | "Requested"
+  printable: PrintableCertificate
 }
 
 interface StudentOption {
   id: string
   full_name: string
+  guardianName: string
   course_slug: string | null
   courseName: string
 }
@@ -75,12 +81,20 @@ export default function AdminCertificatesPage() {
   const [search, setSearch] = useState("")
   const [loading, setLoading] = useState(true)
   const [certificates, setCertificates] = useState<Certificate[]>([])
+  const [previewCertificate, setPreviewCertificate] = useState<PrintableCertificate | null>(null)
+  const [previewTitle, setPreviewTitle] = useState("")
   const [issueOpen, setIssueOpen] = useState(false)
   const [studentPickerOpen, setStudentPickerOpen] = useState(false)
   const [students, setStudents] = useState<StudentOption[]>([])
   const [selectedStudent, setSelectedStudent] = useState("")
   const [studentSearch, setStudentSearch] = useState("")
   const [certType, setCertType] = useState("Completion")
+  const [issuedDate, setIssuedDate] = useState(localDate)
+  const [courseStartDate, setCourseStartDate] = useState("")
+  const [courseEndDate, setCourseEndDate] = useState("")
+  const [division, setDivision] = useState("")
+  const [customDivision, setCustomDivision] = useState("")
+  const [divisionDialogOpen, setDivisionDialogOpen] = useState(false)
   const [issuing, setIssuing] = useState(false)
 
   async function fetchCertificates() {
@@ -102,16 +116,32 @@ export default function AdminCertificatesPage() {
       : { data: [] }
     const courseMap = new Map((courseRows ?? []).map((course) => [course.slug, course.name]))
 
-    const mapped: Certificate[] = (data || []).map((row) => ({
-      id: row.id,
-      studentName: row.student_name,
-      studentId: row.student_id,
-      course: row.course_slug ? (courseMap.get(row.course_slug) ?? row.course_slug) : "—",
-      type: row.type,
-      issuedDate: row.issued_date || "—",
-      credentialId: row.credential_id || "—",
-      status: row.status,
-    }))
+    const mapped: Certificate[] = (data || []).map((row) => {
+      const course = row.course_slug ? (courseMap.get(row.course_slug) ?? row.course_slug) : "—"
+      return {
+        id: row.id,
+        studentName: row.student_name,
+        studentId: row.student_id,
+        course,
+        type: row.type,
+        issuedDate: row.issued_date || "—",
+        credentialId: row.credential_id || "—",
+        status: row.status,
+        printable: {
+          studentName: row.student_name,
+          guardianName: row.guardian_name || "",
+          course,
+          type: row.type,
+          name: row.name,
+          credentialId: row.credential_id || "—",
+          issuedDate: row.issued_date || "—",
+          courseStartDate: row.course_start_date || "",
+          courseEndDate: row.course_end_date || "",
+          division: row.division || "",
+          issuedBy: row.issued_by || "TNGC Computers",
+        },
+      }
+    })
 
     setCertificates(mapped)
     setLoading(false)
@@ -119,7 +149,7 @@ export default function AdminCertificatesPage() {
 
   async function fetchStudents() {
     const [studentsRes, instRes, feesRes, certRes] = await Promise.all([
-      supabase.from("students").select("id, full_name").order("full_name"),
+      supabase.from("students").select("id, full_name, father_name").order("full_name"),
       supabase.from("fee_installments").select("fee_id, status"),
       supabase.from("fees").select("id, student_id, course_slug"),
       supabase.from("certificates").select("student_id, course_slug, status"),
@@ -175,6 +205,7 @@ export default function AdminCertificatesPage() {
       const option: StudentOption = {
         id: `${student.id}:${fee.course_slug}`,
         full_name: student.full_name,
+        guardianName: student.father_name ?? "",
         course_slug: fee.course_slug,
         courseName: coursesMap[fee.course_slug] ?? fee.course_slug,
       }
@@ -209,6 +240,29 @@ export default function AdminCertificatesPage() {
       return
     }
 
+    const validDate = (value: string) => {
+      const parsed = new Date(`${value}T00:00:00.000Z`)
+      return /^\d{4}-\d{2}-\d{2}$/.test(value) &&
+        !Number.isNaN(parsed.getTime()) &&
+        parsed.toISOString().slice(0, 10) === value
+    }
+    if (!validDate(issuedDate)) {
+      toast("Please enter a valid certificate issue date.", { variant: "destructive" })
+      return
+    }
+    if (!validDate(courseStartDate) || !validDate(courseEndDate)) {
+      toast("Please enter valid course start and end dates.", { variant: "destructive" })
+      return
+    }
+    if (courseEndDate < courseStartDate) {
+      toast("The course end date cannot be before its start date.", { variant: "destructive" })
+      return
+    }
+    if (!division.trim()) {
+      toast("Please enter the certificate division.", { variant: "destructive" })
+      return
+    }
+
     setIssuing(true)
 
     const student = students.find((s) => s.id === selectedStudent)
@@ -218,16 +272,14 @@ export default function AdminCertificatesPage() {
       return
     }
 
-    // A credential id is the number a graduate quotes to verify a certificate,
-    // so it has to be distinguishable. The old `Math.random() * 9999` gave
-    // roughly one collision per hundred certificates and nothing detected it —
-    // `certificates.credential_id` has no unique index, so two students could
-    // be handed the same official-looking reference with no error anywhere.
-    // The random tail plus the date makes that vanishingly unlikely, and the
-    // insert is retried on the vanishingly-unlikely case below.
-    const issuedDate = localDate()
-    const credentialId = `TNGC-${issuedDate.slice(0, 4)}-${mintId("").replace(/-/g, "").slice(0, 6).toUpperCase()}`
+    const credentialId = `TNGC/${mintId("ROLL").split("-").at(-1)?.toUpperCase() ?? ""}/N`
     const certId = mintId("CERT")
+    const certificateDetails = {
+      guardian_name: student.guardianName || null,
+      course_start_date: courseStartDate,
+      course_end_date: courseEndDate,
+      division: division.trim(),
+    }
 
     const { data: existingCert, error: existingError } = await supabase
       .from("certificates")
@@ -254,6 +306,7 @@ export default function AdminCertificatesPage() {
           type: certType as "Completion" | "Proficiency" | "Module",
           credential_id: credentialId,
           issued_date: issuedDate,
+          ...certificateDetails,
           issued_by: "admin",
           status: "Issued",
           updated_at: new Date().toISOString(),
@@ -269,6 +322,7 @@ export default function AdminCertificatesPage() {
         type: certType as "Completion" | "Proficiency" | "Module",
         credential_id: credentialId,
         issued_date: issuedDate,
+        ...certificateDetails,
         issued_by: "admin",
         status: "Issued",
       }))
@@ -284,8 +338,35 @@ export default function AdminCertificatesPage() {
     toast("Certificate issued successfully", { variant: "success" })
     setSelectedStudent("")
     setCertType("Completion")
+    setIssuedDate(localDate())
+    setCourseStartDate("")
+    setCourseEndDate("")
+    setDivision("")
+    setCustomDivision("")
     setIssueOpen(false)
     fetchCertificates()
+  }
+
+  function handleDivisionChange(value: string | null) {
+    if (value === "Others") {
+      setCustomDivision(DIVISION_OPTIONS.includes(division as typeof DIVISION_OPTIONS[number]) ? "" : division)
+      setDivisionDialogOpen(true)
+      return
+    }
+    if (value && value !== CUSTOM_DIVISION_OPTION) setDivision(value)
+  }
+
+  function saveCustomDivision() {
+    const trimmed = customDivision.trim()
+    if (!trimmed) return
+    setDivision(trimmed)
+    setDivisionDialogOpen(false)
+  }
+
+  function handlePrintPreview() {
+    if (previewCertificate && !printCertificate(previewCertificate)) {
+      toast("Please allow pop-ups to print certificates", { variant: "destructive" })
+    }
   }
 
   const stats = [
@@ -302,6 +383,20 @@ export default function AdminCertificatesPage() {
       c.credentialId.toLowerCase().includes(search.toLowerCase())
   )
 
+  const templateCertificate: PrintableCertificate = {
+    studentName: "Student Name",
+    guardianName: "Guardian Name",
+    course: "Course Name",
+    type: "Completion",
+    name: "Certificate Template",
+    credentialId: "TNGC/9207/N",
+    issuedDate: localDate(),
+    courseStartDate: "",
+    courseEndDate: "",
+    division: "",
+    issuedBy: "TNGC Computers",
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -312,15 +407,24 @@ export default function AdminCertificatesPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Certificates</h1>
           <p className="text-xs text-muted-foreground">Issue and manage student certificates</p>
         </div>
-        <Button size="sm" className="gap-2" onClick={() => setIssueOpen(true)}>
-          <Send className="h-4 w-4" />
-          Issue Certificate
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" variant="outline" className="gap-2" onClick={() => {
+            setPreviewCertificate(templateCertificate)
+            setPreviewTitle("Certificate Template")
+          }}>
+            <Eye className="h-4 w-4" />
+            View Template
+          </Button>
+          <Button size="sm" className="gap-2" onClick={() => setIssueOpen(true)}>
+            <Send className="h-4 w-4" />
+            Issue Certificate
+          </Button>
+        </div>
       </div>
 
       <div className="grid gap-2 grid-cols-2 lg:grid-cols-4">
@@ -396,10 +500,27 @@ export default function AdminCertificatesPage() {
                     <TableCell className="hidden lg:table-cell font-mono text-xs text-muted-foreground">{cert.credentialId}</TableCell>
                     <TableCell className="hidden sm:table-cell text-muted-foreground text-sm">{cert.issuedDate}</TableCell>
                     <TableCell>
-                      <Badge variant="secondary" className={cn("text-[10px] gap-1", cfg.className)}>
-                        <Icon className="size-2.5" />
-                        {cert.status}
-                      </Badge>
+                      <div className="flex items-center gap-2">
+                        <Badge variant="secondary" className={cn("text-[10px] gap-1", cfg.className)}>
+                          <Icon className="size-2.5" />
+                          {cert.status}
+                        </Badge>
+                        {cert.status === "Issued" && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 gap-1 px-2"
+                            onClick={() => {
+                              setPreviewCertificate(cert.printable)
+                              setPreviewTitle(`${cert.studentName} certificate`)
+                            }}
+                          >
+                            <Eye className="size-3.5" />
+                            View
+                          </Button>
+                        )}
+                      </div>
                     </TableCell>
                   </TableRow>
                 )
@@ -409,8 +530,48 @@ export default function AdminCertificatesPage() {
         </CardContent>
       </Card>
 
+      <Dialog open={!!previewCertificate} onOpenChange={(open) => {
+        if (!open) {
+          setPreviewCertificate(null)
+          setPreviewTitle("")
+        }
+      }}>
+        <DialogContent className="w-[calc(100%-1rem)] max-w-[calc(100%-1rem)] max-h-[90dvh] overflow-y-auto overscroll-contain p-3 sm:max-w-6xl sm:p-4">
+          <DialogHeader>
+            <DialogTitle>{previewTitle || "Certificate Preview"}</DialogTitle>
+            <DialogDescription>
+              {previewTitle === "Certificate Template"
+                ? "Preview of the certificate design used when issuing certificates."
+                : "Preview the issued certificate without the student photo."}
+            </DialogDescription>
+          </DialogHeader>
+          {previewCertificate && (
+            <iframe
+              title={previewTitle || "Certificate preview"}
+              srcDoc={createCertificateHtml(previewCertificate)}
+              sandbox=""
+              className="block aspect-[297/210] max-h-[65dvh] min-h-48 w-full rounded-lg border bg-white"
+            />
+          )}
+          <DialogFooter>
+            {previewCertificate && previewTitle !== "Certificate Template" && (
+              <Button type="button" onClick={handlePrintPreview}>
+                <Printer className="size-4" />
+                Print certificate
+              </Button>
+            )}
+            <Button type="button" variant="outline" onClick={() => {
+              setPreviewCertificate(null)
+              setPreviewTitle("")
+            }}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={issueOpen} onOpenChange={setIssueOpen}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Award className="size-5" />
@@ -457,6 +618,67 @@ export default function AdminCertificatesPage() {
                 </SelectContent>
               </Select>
             </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="certificateIssueDate">Certificate Issue Date *</Label>
+              <Input
+                id="certificateIssueDate"
+                type="date"
+                value={issuedDate}
+                onChange={(event) => setIssuedDate(event.target.value)}
+                required
+              />
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="certificateCourseStartDate">Course Start Date *</Label>
+                <Input
+                  id="certificateCourseStartDate"
+                  type="date"
+                  value={courseStartDate}
+                  onChange={(event) => setCourseStartDate(event.target.value)}
+                  required
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="certificateCourseEndDate">Course End Date *</Label>
+                <Input
+                  id="certificateCourseEndDate"
+                  type="date"
+                  value={courseEndDate}
+                  onChange={(event) => setCourseEndDate(event.target.value)}
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="certificateDivision">Division *</Label>
+              <Select
+                value={
+                  DIVISION_OPTIONS.includes(division as typeof DIVISION_OPTIONS[number])
+                    ? division
+                    : division
+                      ? CUSTOM_DIVISION_OPTION
+                      : ""
+                }
+                onValueChange={handleDivisionChange}
+              >
+                <SelectTrigger id="certificateDivision">
+                  <SelectValue placeholder="Select division" />
+                </SelectTrigger>
+                <SelectContent>
+                  {DIVISION_OPTIONS.map((option) => (
+                    <SelectItem key={option} value={option}>{option}</SelectItem>
+                  ))}
+                  {division && !DIVISION_OPTIONS.includes(division as typeof DIVISION_OPTIONS[number]) && (
+                    <SelectItem value={CUSTOM_DIVISION_OPTION}>{division}</SelectItem>
+                  )}
+                  <SelectItem value="Others">Others</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
 
           <DialogFooter>
@@ -475,6 +697,42 @@ export default function AdminCertificatesPage() {
                   Issue Certificate
                 </>
               )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={divisionDialogOpen} onOpenChange={setDivisionDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Enter certificate division</DialogTitle>
+            <DialogDescription>
+              Enter the division to appear on this certificate.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="customCertificateDivision">Division</Label>
+            <Input
+              id="customCertificateDivision"
+              autoFocus
+              value={customDivision}
+              onChange={(event) => setCustomDivision(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault()
+                  saveCustomDivision()
+                }
+              }}
+              maxLength={80}
+              placeholder="Enter division"
+            />
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setDivisionDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="button" onClick={saveCustomDivision} disabled={!customDivision.trim()}>
+              Save division
             </Button>
           </DialogFooter>
         </DialogContent>

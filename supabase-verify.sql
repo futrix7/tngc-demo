@@ -1,6 +1,7 @@
 -- Post-migration checks. Every query here is expected to return ZERO rows (or,
 -- where a result is the point, the exact shape shown). Run it in the Supabase SQL
--- editor after applying supabase.sql.
+-- editor after applying supabase.sql, supabase-seed.sql, and
+-- supabase-student-import.sql.
 
 -- ---------------------------------------------------------------------------
 -- 1. A student record carries the data the app now selects by name.
@@ -20,11 +21,8 @@ AND NOT c.relrowsecurity;
 -- ---------------------------------------------------------------------------
 -- 3. The branches table and its branch_id columns exist.
 --
---    The app read `branches` and `branch_id` on nearly every admin screen, and
---    the canonical migration created neither: a payment's branch breakdown came
---    out empty and the branch pickers in the expense and teacher sheets had
---    nothing to select. All four columns must be uuid, and nullable with ON
---    DELETE SET NULL so removing a campus cannot cascade away a student.
+--    Branch IDs are text throughout the schema. Every branch_id is nullable
+--    with ON DELETE SET NULL so removing a campus cannot cascade away a student.
 -- ---------------------------------------------------------------------------
 SELECT table_name, column_name, data_type, is_nullable
 FROM information_schema.columns
@@ -32,7 +30,7 @@ WHERE table_schema = 'public'
   AND (
     (table_name = 'branches')
     OR (column_name = 'branch_id'
-        AND table_name IN ('students', 'teachers', 'payments', 'transactions'))
+        AND table_name IN ('students', 'teachers', 'payments', 'transactions', 'student_legacy'))
   )
 ORDER BY table_name, column_name;
 
@@ -50,7 +48,67 @@ SELECT 'payments', id, branch_id FROM payments
   WHERE branch_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM branches b WHERE b.id = payments.branch_id)
 UNION ALL
 SELECT 'teachers', id, branch_id FROM teachers
-  WHERE branch_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM branches b WHERE b.id = teachers.branch_id);
+  WHERE branch_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM branches b WHERE b.id = teachers.branch_id)
+UNION ALL
+SELECT 'transactions', id::text, branch_id FROM transactions
+  WHERE branch_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM branches b WHERE b.id = transactions.branch_id)
+UNION ALL
+SELECT 'student_legacy', id::text, branch_id FROM student_legacy
+  WHERE branch_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM branches b WHERE b.id = student_legacy.branch_id);
+
+-- student_legacy is temporary staging: it keeps normalized and source columns
+-- for direct Supabase Studio CSV uploads, then successful rows are deleted.
+SELECT column_name, data_type
+FROM information_schema.columns
+WHERE table_schema = 'public'
+  AND table_name = 'student_legacy'
+  AND column_name IN (
+    'id', 'original_id', 'first_name', 'sur_name', 'branch_id',
+    'student_id', 'first_name_s', 'sur_name_s', 'father_name_s', 'branch_s',
+    'mobile_no_s', 'long_s', 'short_s', 'time_s'
+  )
+ORDER BY ordinal_position;
+
+SELECT column_name, data_type, column_default
+FROM information_schema.columns
+WHERE table_schema = 'public'
+  AND table_name = 'students'
+  AND column_name IN (
+    'is_legacy_import', 'legacy_original_id', 'legacy_course_label',
+    'legacy_branch_label', 'legacy_enrollment_time'
+  );
+
+-- Successfully imported rows must not remain duplicated in the staging table.
+SELECT count(*) AS rows_remaining_in_student_legacy
+FROM student_legacy;
+
+-- Every converted legacy profile keeps a unique source ID for safe re-imports.
+SELECT id, legacy_original_id
+FROM students
+WHERE is_legacy_import = TRUE
+  AND legacy_original_id IS NULL;
+
+SELECT legacy_original_id, count(*)
+FROM students
+WHERE legacy_original_id IS NOT NULL
+GROUP BY legacy_original_id
+HAVING count(*) > 1;
+
+SELECT proname
+FROM pg_proc
+WHERE pronamespace = 'public'::regnamespace
+  AND proname IN (
+    'convert_one_legacy_student',
+    'convert_legacy_students',
+    'auto_convert_legacy_student',
+    'add_student_fee_installment'
+  );
+
+SELECT tgname
+FROM pg_trigger
+WHERE tgrelid = 'public.student_legacy'::regclass
+  AND NOT tgisinternal
+  AND tgname IN ('normalize_student_legacy_csv_row', 'auto_convert_legacy_student');
 
 -- ---------------------------------------------------------------------------
 -- 4. anon holds no write privilege on any table.

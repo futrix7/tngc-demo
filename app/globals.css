@@ -188,6 +188,19 @@
   }
 }
 
+.recharts-tooltip-cursor {
+  fill: var(--muted);
+  fill-opacity: 0.35;
+}
+
+.recharts-tooltip-item {
+  color: var(--card-foreground) !important;
+}
+
+.recharts-tooltip-label {
+  color: var(--card-foreground);
+}
+
 /* ─────────────────────────────────────────────────────
    CUSTOM ANIMATIONS
    ───────────────────────────────────────────────────── */

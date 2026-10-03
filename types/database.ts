@@ -142,14 +142,19 @@ export interface Database {
           address: string | null
           branch_id: string | null
           course_slug: string | null
-          enrollment_date: string
+          enrollment_date: string | null
           batch_time: string | null
-          status: "Active" | "Inactive" | "Pending"
+          status: "Active" | "Inactive" | "Pending" | null
           father_name: string | null
           father_phone: string | null
           mother_name: string | null
           alternate_phone: string | null
           profile_photo: string | null
+          is_legacy_import: boolean
+          legacy_original_id: string | null
+          legacy_course_label: string | null
+          legacy_branch_label: string | null
+          legacy_enrollment_time: string | null
           created_at: string
           updated_at: string
         }
@@ -164,14 +169,19 @@ export interface Database {
           address?: string | null
           branch_id?: string | null
           course_slug?: string | null
-          enrollment_date?: string
+          enrollment_date?: string | null
           batch_time?: string | null
-          status?: "Active" | "Inactive" | "Pending"
+          status?: "Active" | "Inactive" | "Pending" | null
           father_name?: string | null
           father_phone?: string | null
           mother_name?: string | null
           alternate_phone?: string | null
           profile_photo?: string | null
+          is_legacy_import?: boolean
+          legacy_original_id?: string | null
+          legacy_course_label?: string | null
+          legacy_branch_label?: string | null
+          legacy_enrollment_time?: string | null
           created_at?: string
           updated_at?: string
         }
@@ -186,16 +196,98 @@ export interface Database {
           address?: string | null
           branch_id?: string | null
           course_slug?: string | null
-          enrollment_date?: string
+          enrollment_date?: string | null
           batch_time?: string | null
-          status?: "Active" | "Inactive" | "Pending"
+          status?: "Active" | "Inactive" | "Pending" | null
           father_name?: string | null
           father_phone?: string | null
           mother_name?: string | null
           alternate_phone?: string | null
           profile_photo?: string | null
+          is_legacy_import?: boolean
+          legacy_original_id?: string | null
+          legacy_course_label?: string | null
+          legacy_branch_label?: string | null
+          legacy_enrollment_time?: string | null
           created_at?: string
           updated_at?: string
+        }
+      }
+      student_legacy: {
+        Row: {
+          id: number
+          original_id: string | null
+          first_name: string | null
+          sur_name: string | null
+          father_name: string | null
+          branch_id: string | null
+          mobile_no: string | null
+          long_course: string | null
+          short_course: string | null
+          enrollment_time: string | null
+          raw_branch_s: string | null
+          raw_long_s: string | null
+          raw_short_s: string | null
+          first_name_s: string | null
+          sur_name_s: string | null
+          father_name_s: string | null
+          branch_s: string | null
+          mobile_no_s: string | null
+          long_s: string | null
+          short_s: string | null
+          time_s: string | null
+          student_id: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: number
+          original_id?: string | null
+          first_name?: string | null
+          sur_name?: string | null
+          father_name?: string | null
+          branch_id?: string | null
+          mobile_no?: string | null
+          long_course?: string | null
+          short_course?: string | null
+          enrollment_time?: string | null
+          raw_branch_s?: string | null
+          raw_long_s?: string | null
+          raw_short_s?: string | null
+          first_name_s?: string | null
+          sur_name_s?: string | null
+          father_name_s?: string | null
+          branch_s?: string | null
+          mobile_no_s?: string | null
+          long_s?: string | null
+          short_s?: string | null
+          time_s?: string | null
+          student_id?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: number
+          original_id?: string | null
+          first_name?: string | null
+          sur_name?: string | null
+          father_name?: string | null
+          branch_id?: string | null
+          mobile_no?: string | null
+          long_course?: string | null
+          short_course?: string | null
+          enrollment_time?: string | null
+          raw_branch_s?: string | null
+          raw_long_s?: string | null
+          raw_short_s?: string | null
+          first_name_s?: string | null
+          sur_name_s?: string | null
+          father_name_s?: string | null
+          branch_s?: string | null
+          mobile_no_s?: string | null
+          long_s?: string | null
+          short_s?: string | null
+          time_s?: string | null
+          student_id?: string | null
+          created_at?: string
         }
       }
       teachers: {
@@ -203,7 +295,7 @@ export interface Database {
           id: string
           user_id: string | null
           full_name: string
-          email: string
+          email: string | null
           phone: string
           role: string
           branch_id: string | null
@@ -221,7 +313,7 @@ export interface Database {
           id: string
           user_id?: string | null
           full_name: string
-          email: string
+          email?: string | null
           phone: string
           role: string
           branch_id?: string | null
@@ -239,7 +331,7 @@ export interface Database {
           id?: string
           user_id?: string | null
           full_name?: string
-          email?: string
+          email?: string | null
           phone?: string
           role?: string
           branch_id?: string | null
@@ -495,6 +587,10 @@ export interface Database {
           type: "Completion" | "Proficiency" | "Module"
           issued_date: string | null
           credential_id: string | null
+          guardian_name: string | null
+          course_start_date: string | null
+          course_end_date: string | null
+          division: string | null
           issued_by: string | null
           branch_id: string | null
           status: "Issued" | "Pending" | "Rejected" | "Processing" | "Requested"
@@ -510,6 +606,10 @@ export interface Database {
           type: "Completion" | "Proficiency" | "Module"
           issued_date?: string | null
           credential_id?: string | null
+          guardian_name?: string | null
+          course_start_date?: string | null
+          course_end_date?: string | null
+          division?: string | null
           issued_by?: string | null
           branch_id?: string | null
           status?: "Issued" | "Pending" | "Rejected" | "Processing" | "Requested"
@@ -525,6 +625,10 @@ export interface Database {
           type?: "Completion" | "Proficiency" | "Module"
           issued_date?: string | null
           credential_id?: string | null
+          guardian_name?: string | null
+          course_start_date?: string | null
+          course_end_date?: string | null
+          division?: string | null
           issued_by?: string | null
           branch_id?: string | null
           status?: "Issued" | "Pending" | "Rejected" | "Processing" | "Requested"
@@ -785,8 +889,9 @@ export interface Database {
       }
       enroll_student_in_course: {
         Args: {
-          p_user_id: string
           p_course_slug: string
+          p_user_id?: string | null
+          p_student_id?: string | null
           p_total_fee_override?: number | null
           /** At most 3 amounts of the caller's own, adding up to the course fee. */
           p_installment_amounts?: number[] | null
@@ -800,6 +905,21 @@ export interface Database {
           fee_id: string
           course_slug: string
           total_fee: number
+        }[]
+      }
+      add_student_fee_installment: {
+        Args: {
+          p_student_id: string
+          p_fee_id: string
+          p_split_from_installment_id: string
+          p_amount: number
+          p_label: string
+          p_due_date: string
+        }
+        Returns: {
+          new_installment_id: string
+          new_installment_label: string
+          remaining_source_amount: number
         }[]
       }
       /**

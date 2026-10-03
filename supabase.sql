@@ -3,15 +3,6 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 DO $$
-BEGIN
-  DROP TABLE IF EXISTS public.announcements CASCADE;
-  DROP TABLE IF EXISTS public.attendance CASCADE;
-  DROP TABLE IF EXISTS public.activity_log CASCADE;
-  DROP TABLE IF EXISTS public.events CASCADE;
-  DROP TABLE IF EXISTS public.pending_tasks CASCADE;
-END $$;
-
-DO $$
 DECLARE
   spec   text;
   type_name text;
@@ -73,16 +64,10 @@ BEGIN
   END IF;
 END $$;
 
--- The institute's campuses. Every screen that groups by branch — the student
--- directory, the installments list, the finance breakdown, the analytics filters
--- reads this table, and every one of them was querying a table this script
--- never created. A database built from supabase.sql alone had no branches, so those
--- groupings silently collapsed to a single unnamed bucket.
---
--- Ids are fixed rather than generated so a re-run of the seed is idempotent and
--- so the sample campuses below are addressable before any row is inserted.
+-- Campuses shared by the student, payment, finance, and analytics screens.
+-- Seed IDs are stable; generated IDs remain text to match all branch references.
 CREATE TABLE IF NOT EXISTS branches (
-  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id          TEXT PRIMARY KEY DEFAULT uuid_generate_v4()::text,
   name        TEXT UNIQUE NOT NULL,
   tag         TEXT,
   address     TEXT NOT NULL DEFAULT '',
@@ -100,6 +85,76 @@ COMMENT ON TABLE public.branches IS
 -- office, and a second "primary" made that label depend on row order.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_branches_single_primary
   ON branches (is_primary) WHERE is_primary;
+
+-- Branch identifiers are text in the deployed database. Normalize older UUID
+-- versions before creating foreign keys so existing branch IDs stay intact.
+DO $$
+DECLARE
+  constraint_row record;
+  v_table_name text;
+BEGIN
+  FOR constraint_row IN
+    SELECT conrelid::regclass AS relation_name, conname
+      FROM pg_constraint
+     WHERE contype = 'f'
+       AND confrelid = 'public.branches'::regclass
+  LOOP
+    EXECUTE format(
+      'ALTER TABLE %s DROP CONSTRAINT %I',
+      constraint_row.relation_name,
+      constraint_row.conname
+    );
+  END LOOP;
+
+  ALTER TABLE public.branches
+    ALTER COLUMN id TYPE text USING id::text,
+    ALTER COLUMN id SET DEFAULT uuid_generate_v4()::text;
+
+  FOREACH v_table_name IN ARRAY ARRAY[
+    'students', 'teachers', 'payments', 'transactions', 'student_legacy'
+  ] LOOP
+    IF to_regclass(format('public.%I', v_table_name)) IS NOT NULL
+       AND EXISTS (
+         SELECT 1
+           FROM information_schema.columns AS c
+          WHERE c.table_schema = 'public'
+            AND c.table_name = v_table_name
+            AND c.column_name = 'branch_id'
+       ) THEN
+      EXECUTE format(
+        'ALTER TABLE public.%I ALTER COLUMN branch_id TYPE text USING branch_id::text',
+        v_table_name
+      );
+    END IF;
+  END LOOP;
+END;
+$$;
+
+-- Temporary staging table for rows imported from the legacy CSV.
+-- Successfully converted rows are deleted by the student-import migration trigger.
+-- Keep this after branches because branch_id references that table.
+CREATE TABLE IF NOT EXISTS student_legacy (
+  id                      BIGSERIAL PRIMARY KEY,
+  original_id             TEXT,
+  first_name              TEXT,
+  sur_name                TEXT,
+  father_name             TEXT,
+  branch_id               TEXT REFERENCES branches(id) ON DELETE SET NULL,
+  mobile_no               TEXT,
+  long_course             TEXT,
+  short_course            TEXT,
+  enrollment_time         TIMESTAMPTZ,
+  raw_branch_s            TEXT,
+  raw_long_s              TEXT,
+  raw_short_s             TEXT,
+  created_at              TIMESTAMPTZ DEFAULT NOW()
+);
+
+COMMENT ON TABLE public.student_legacy IS
+  'Temporary CSV staging for legacy student conversion. Rows are removed after successful conversion.';
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_student_legacy_original_id
+  ON student_legacy (original_id);
 
 CREATE TABLE IF NOT EXISTS courses (
   id                    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -151,12 +206,28 @@ CREATE TABLE IF NOT EXISTS students (
   profile_photo           TEXT,
   present_status          TEXT,
   full_name_as_signature  TEXT,
-  branch_id               UUID REFERENCES branches(id) ON DELETE SET NULL,
+  branch_id                 TEXT REFERENCES branches(id) ON DELETE SET NULL,
+  is_legacy_import        BOOLEAN NOT NULL DEFAULT FALSE,
+  legacy_original_id      TEXT,
+  legacy_course_label     TEXT,
+  legacy_branch_label     TEXT,
+  legacy_enrollment_time  TIMESTAMPTZ,
   created_at              TIMESTAMPTZ DEFAULT NOW(),
   updated_at              TIMESTAMPTZ DEFAULT NOW()
 );
 
 ALTER TABLE students ALTER COLUMN email DROP NOT NULL;
+ALTER TABLE students ALTER COLUMN status DROP NOT NULL;
+ALTER TABLE students ADD COLUMN IF NOT EXISTS is_legacy_import BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE students
+  ADD COLUMN IF NOT EXISTS legacy_original_id TEXT,
+  ADD COLUMN IF NOT EXISTS legacy_course_label TEXT,
+  ADD COLUMN IF NOT EXISTS legacy_branch_label TEXT,
+  ADD COLUMN IF NOT EXISTS legacy_enrollment_time TIMESTAMPTZ;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_students_legacy_original_id
+  ON students (legacy_original_id)
+  WHERE legacy_original_id IS NOT NULL;
 
 -- Migrate linked student accounts once: Auth uses E.164 phone identifiers,
 -- while the student table keeps the local 10-digit number used by the portal.
@@ -210,10 +281,14 @@ CREATE TABLE IF NOT EXISTS teachers (
   salary         NUMERIC(10,2),
   status         teacher_status DEFAULT 'Active',
   profile_photo  TEXT,
-  branch_id      UUID REFERENCES branches(id) ON DELETE SET NULL,
+  branch_id      TEXT REFERENCES branches(id) ON DELETE SET NULL,
   created_at     TIMESTAMPTZ DEFAULT NOW(),
   updated_at     TIMESTAMPTZ DEFAULT NOW()
 );
+
+ALTER TABLE teachers ALTER COLUMN email DROP NOT NULL;
+ALTER TABLE teachers ALTER COLUMN qualification TYPE TEXT USING qualification::text;
+ALTER TABLE teachers ALTER COLUMN specialization TYPE TEXT USING specialization::text;
 
 CREATE TABLE IF NOT EXISTS admins (
   id             UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -289,7 +364,7 @@ CREATE TABLE IF NOT EXISTS payments (
   -- Which campus took the money. Nullable because an opening payment is written
   -- by record_fee_payment(), which reads the student rather than a form, and a
   -- student may not have a branch yet.
-  branch_id   UUID REFERENCES branches(id) ON DELETE SET NULL,
+  branch_id   TEXT REFERENCES branches(id) ON DELETE SET NULL,
 
   verified_at  timestamptz,
   verified_by  text,
@@ -305,11 +380,21 @@ CREATE TABLE IF NOT EXISTS certificates (
   type           certificate_type NOT NULL,
   issued_date    DATE,
   credential_id  TEXT,
+  guardian_name  TEXT,
+  course_start_date DATE,
+  course_end_date DATE,
+  division       TEXT,
   issued_by      TEXT,
   status         certificate_status DEFAULT 'Pending',
   created_at     TIMESTAMPTZ DEFAULT NOW(),
   updated_at     TIMESTAMPTZ DEFAULT NOW()
 );
+
+ALTER TABLE certificates
+  ADD COLUMN IF NOT EXISTS guardian_name TEXT,
+  ADD COLUMN IF NOT EXISTS course_start_date DATE,
+  ADD COLUMN IF NOT EXISTS course_end_date DATE,
+  ADD COLUMN IF NOT EXISTS division TEXT;
 
 CREATE TABLE IF NOT EXISTS videos (
   id            TEXT PRIMARY KEY,
@@ -332,7 +417,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   category     TEXT NOT NULL,
   amount       NUMERIC(10,2) NOT NULL,
   type         transaction_type NOT NULL,
-  branch_id    UUID REFERENCES branches(id) ON DELETE SET NULL,
+  branch_id    TEXT REFERENCES branches(id) ON DELETE SET NULL,
   created_at   TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -365,10 +450,42 @@ ALTER TABLE students ADD COLUMN IF NOT EXISTS full_name_as_signature TEXT;
 -- no such column, so every one of those queries failed outright rather than
 -- returning nothing — hence the backfill here as well as in the CREATE TABLE
 -- statements above.
-ALTER TABLE students     ADD COLUMN IF NOT EXISTS branch_id uuid REFERENCES branches(id) ON DELETE SET NULL;
-ALTER TABLE teachers     ADD COLUMN IF NOT EXISTS branch_id uuid REFERENCES branches(id) ON DELETE SET NULL;
-ALTER TABLE payments     ADD COLUMN IF NOT EXISTS branch_id uuid REFERENCES branches(id) ON DELETE SET NULL;
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS branch_id uuid REFERENCES branches(id) ON DELETE SET NULL;
+ALTER TABLE students     ADD COLUMN IF NOT EXISTS branch_id text REFERENCES branches(id) ON DELETE SET NULL;
+ALTER TABLE teachers     ADD COLUMN IF NOT EXISTS branch_id text REFERENCES branches(id) ON DELETE SET NULL;
+ALTER TABLE payments     ADD COLUMN IF NOT EXISTS branch_id text REFERENCES branches(id) ON DELETE SET NULL;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS branch_id text REFERENCES branches(id) ON DELETE SET NULL;
+
+DO $$
+DECLARE
+  v_table_name text;
+  constraint_name text;
+BEGIN
+  FOREACH v_table_name IN ARRAY ARRAY[
+    'students', 'teachers', 'payments', 'transactions', 'student_legacy'
+  ] LOOP
+    constraint_name := v_table_name || '_branch_id_fkey';
+    IF NOT EXISTS (
+      SELECT 1
+        FROM pg_constraint
+       WHERE conrelid = format('public.%I', v_table_name)::regclass
+         AND conname = constraint_name
+    ) THEN
+      EXECUTE format(
+        'UPDATE public.%I AS student_row SET branch_id = NULL
+          WHERE branch_id IS NOT NULL
+            AND NOT EXISTS (SELECT 1 FROM public.branches AS branch WHERE branch.id = student_row.branch_id)',
+        v_table_name
+      );
+      EXECUTE format(
+        'ALTER TABLE public.%I ADD CONSTRAINT %I
+           FOREIGN KEY (branch_id) REFERENCES public.branches(id) ON DELETE SET NULL',
+        v_table_name,
+        constraint_name
+      );
+    END IF;
+  END LOOP;
+END;
+$$;
 
 CREATE INDEX IF NOT EXISTS idx_students_course       ON students(course_slug);
 CREATE INDEX IF NOT EXISTS idx_students_status       ON students(status);
@@ -434,11 +551,15 @@ STABLE
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
-  SELECT s.id FROM public.students s WHERE s.user_id = auth.uid() LIMIT 1;
+  SELECT s.id
+    FROM public.students s
+   WHERE s.user_id = auth.uid()
+     AND s.status IS DISTINCT FROM 'Inactive'
+   LIMIT 1;
 $$;
 
 COMMENT ON FUNCTION public.current_student_id() IS
-  'The student record id belonging to the caller, or NULL. Scopes student self-service policies.';
+  'The active student record id belonging to the caller, or NULL. Deactivated students cannot use self-service fee, payment, or certificate policies.';
 
 ALTER FUNCTION public.is_admin()          OWNER TO postgres;
 ALTER FUNCTION public.current_student_id() OWNER TO postgres;
@@ -488,6 +609,9 @@ SET search_path = public, pg_temp
 AS $$
   SELECT 'STU-' || p_year::text || '-' || LPAD(nextval('public.student_code_seq')::text, 3, '0');
 $$;
+
+ALTER TABLE public.students
+  ALTER COLUMN id SET DEFAULT public.next_student_code(EXTRACT(YEAR FROM CURRENT_DATE)::integer);
 
 CREATE OR REPLACE FUNCTION public.next_payment_code(p_year integer)
 RETURNS text
@@ -542,6 +666,24 @@ END $$;
 
 ALTER TABLE payments DROP CONSTRAINT IF EXISTS payments_amount_non_negative;
 ALTER TABLE payments ADD CONSTRAINT payments_amount_non_negative CHECK (amount >= 0);
+
+CREATE OR REPLACE FUNCTION public.enforce_whole_rupee_payment_amount()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  IF NEW.amount <> trunc(NEW.amount) THEN
+    RAISE EXCEPTION 'the payment amount must be a whole number of rupees' USING ERRCODE = '22023';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS payments_whole_rupee_amount_check ON payments;
+CREATE TRIGGER payments_whole_rupee_amount_check
+  BEFORE INSERT OR UPDATE OF amount ON payments
+  FOR EACH ROW EXECUTE FUNCTION public.enforce_whole_rupee_payment_amount();
 
 ALTER TABLE fees DROP CONSTRAINT IF EXISTS fees_amounts_non_negative;
 ALTER TABLE fees ADD CONSTRAINT fees_amounts_non_negative
@@ -633,6 +775,123 @@ COMMENT ON FUNCTION public.create_fee_schedule(uuid, numeric[], date) IS
   'Builds a fee schedule from amounts the caller chose, at most 3 of them, which must add up to the course fee. Nothing is divided for the caller: a blank amount list means one installment for the full fee. service_role only.';
 
 REVOKE ALL ON FUNCTION public.create_fee_schedule(uuid, numeric[], date) FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION public.add_student_fee_installment(
+  p_student_id text,
+  p_fee_id uuid,
+  p_split_from_installment_id uuid,
+  p_amount numeric,
+  p_label text,
+  p_due_date date
+)
+RETURNS TABLE (new_installment_id uuid, new_installment_label text, remaining_source_amount numeric)
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_fee fees%ROWTYPE;
+  v_source fee_installments%ROWTYPE;
+  v_paid_amount numeric;
+  v_pending_amount numeric;
+  v_available_amount numeric;
+  v_next_no integer;
+  v_label text;
+BEGIN
+  IF p_student_id IS NULL OR p_fee_id IS NULL OR p_split_from_installment_id IS NULL THEN
+    RAISE EXCEPTION 'student, course fee, and source installment are required'
+      USING ERRCODE = '22023';
+  END IF;
+  IF p_amount IS NULL OR p_amount <= 0 OR round(p_amount, 2) <> p_amount THEN
+    RAISE EXCEPTION 'enter an installment amount greater than zero with at most two decimal places'
+      USING ERRCODE = '22023';
+  END IF;
+  IF p_due_date IS NULL THEN
+    RAISE EXCEPTION 'an installment due date is required'
+      USING ERRCODE = '22023';
+  END IF;
+  IF NULLIF(btrim(p_label), '') IS NULL OR length(btrim(p_label)) > 100 THEN
+    RAISE EXCEPTION 'enter an installment label of 1 to 100 characters'
+      USING ERRCODE = '22023';
+  END IF;
+
+  PERFORM 1
+    FROM public.students AS student
+   WHERE student.id = p_student_id
+     AND student.status IS DISTINCT FROM 'Inactive'
+   FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'student does not exist or is inactive'
+      USING ERRCODE = '22023';
+  END IF;
+
+  SELECT fee.*
+    INTO v_fee
+    FROM public.fees AS fee
+   WHERE fee.id = p_fee_id
+     AND fee.student_id = p_student_id
+   FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'course fee does not belong to this student'
+      USING ERRCODE = '22023';
+  END IF;
+
+  SELECT installment.*
+    INTO v_source
+    FROM public.fee_installments AS installment
+   WHERE installment.id = p_split_from_installment_id
+     AND installment.fee_id = p_fee_id
+   FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'source installment does not belong to this course fee'
+      USING ERRCODE = '22023';
+  END IF;
+
+  SELECT COALESCE(sum(payment.amount) FILTER (WHERE payment.status = 'Paid'), 0),
+         COALESCE(sum(payment.amount) FILTER (WHERE payment.status = 'Pending'), 0)
+    INTO v_paid_amount, v_pending_amount
+    FROM public.payments AS payment
+   WHERE payment.installment_id = v_source.id;
+
+  v_available_amount := round(v_source.amount - v_paid_amount - v_pending_amount, 2);
+  IF v_available_amount <= 0 OR p_amount >= v_available_amount THEN
+    RAISE EXCEPTION 'split amount must be less than the source installment balance of %',
+      GREATEST(v_available_amount, 0)
+      USING ERRCODE = '22023';
+  END IF;
+
+  SELECT COALESCE(max(installment.installment_no), 0) + 1
+    INTO v_next_no
+    FROM public.fee_installments AS installment
+   WHERE installment.fee_id = p_fee_id;
+
+  v_label := btrim(p_label);
+  UPDATE public.fee_installments
+     SET amount = round(v_source.amount - p_amount, 2),
+         status = CASE WHEN v_paid_amount > 0 THEN 'Partial' ELSE 'Pending' END
+   WHERE id = v_source.id;
+
+  INSERT INTO public.fee_installments (
+    fee_id, label, amount, due_date, status, installment_no
+  )
+  VALUES (
+    p_fee_id, v_label, p_amount, p_due_date, 'Pending', v_next_no
+  )
+  RETURNING id INTO new_installment_id;
+
+  new_installment_label := v_label;
+  remaining_source_amount := round(v_source.amount - p_amount, 2);
+  RETURN NEXT;
+END;
+$$;
+
+COMMENT ON FUNCTION public.add_student_fee_installment(text, uuid, uuid, numeric, text, date) IS
+  'Splits an amount from one outstanding installment into a new dated line without changing the course fee total; paid and pending payment claims remain reserved. service_role only.';
+
+REVOKE ALL ON FUNCTION public.add_student_fee_installment(text, uuid, uuid, numeric, text, date) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.add_student_fee_installment(text, uuid, uuid, numeric, text, date) TO service_role;
+ALTER FUNCTION public.add_student_fee_installment(text, uuid, uuid, numeric, text, date) OWNER TO postgres;
 
 DROP FUNCTION IF EXISTS public.register_student(
   uuid, text, text, text, text, text, text, text[], text, text, text, text,
@@ -796,10 +1055,13 @@ DROP FUNCTION IF EXISTS public.enroll_student_in_course(uuid, text);
 DROP FUNCTION IF EXISTS public.enroll_student_in_course(uuid, text, numeric);
 DROP FUNCTION IF EXISTS public.enroll_student_in_course(uuid, text, numeric, numeric, text, text, text);
 DROP FUNCTION IF EXISTS public.enroll_student_in_course(uuid, text, numeric, numeric[], numeric[], text, text, text);
+DROP FUNCTION IF EXISTS public.enroll_student_in_course(uuid, text, numeric, numeric[], numeric, text, text, text);
+DROP FUNCTION IF EXISTS public.enroll_student_in_course(text, uuid, text, numeric, numeric[], numeric, text, text, text);
 
 CREATE OR REPLACE FUNCTION public.enroll_student_in_course(
-  p_user_id uuid,
   p_course_slug text,
+  p_user_id uuid DEFAULT NULL,
+  p_student_id text DEFAULT NULL,
   p_total_fee_override numeric DEFAULT NULL,
   p_installment_amounts numeric[] DEFAULT NULL,
   p_payment_amount numeric DEFAULT NULL,
@@ -822,7 +1084,8 @@ DECLARE
 BEGIN
   SELECT * INTO v_student
     FROM students
-   WHERE user_id = p_user_id
+   WHERE (p_student_id IS NOT NULL AND id = p_student_id)
+      OR (p_student_id IS NULL AND user_id = p_user_id)
    FOR UPDATE;
 
   IF NOT FOUND THEN
@@ -899,12 +1162,105 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION public.enroll_student_in_course(uuid, text, numeric, numeric[], numeric, text, text, text) IS
-  'Adds an active course to an existing student, builds a schedule from the caller''s own amounts (at most 3, or one line for the whole fee), and optionally records one verified payment of their own choosing. service_role only.';
+COMMENT ON FUNCTION public.enroll_student_in_course(text, uuid, text, numeric, numeric[], numeric, text, text, text) IS
+  'Adds an active course to an existing student by linked user ID or explicit student ID, builds a schedule from caller-supplied amounts (at most 3, or one line for the whole fee), and optionally records one verified payment. service_role only.';
 
-REVOKE ALL ON FUNCTION public.enroll_student_in_course(uuid, text, numeric, numeric[], numeric, text, text, text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.enroll_student_in_course(uuid, text, numeric, numeric[], numeric, text, text, text) TO service_role;
-ALTER FUNCTION public.enroll_student_in_course(uuid, text, numeric, numeric[], numeric, text, text, text) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.enroll_student_in_course(text, uuid, text, numeric, numeric[], numeric, text, text, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.enroll_student_in_course(text, uuid, text, numeric, numeric[], numeric, text, text, text) TO service_role;
+ALTER FUNCTION public.enroll_student_in_course(text, uuid, text, numeric, numeric[], numeric, text, text, text) OWNER TO postgres;
+
+CREATE OR REPLACE FUNCTION public.remove_student_course(
+  p_student_id text,
+  p_course_slug text
+)
+RETURNS void
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_current_course_slug text;
+  v_next_course_slug text;
+BEGIN
+  SELECT course_slug INTO v_current_course_slug
+    FROM students
+   WHERE id = p_student_id
+   FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'student was not found' USING ERRCODE = '22023';
+  END IF;
+
+  PERFORM 1
+    FROM fees
+   WHERE student_id = p_student_id
+     AND course_slug = p_course_slug
+   FOR UPDATE;
+
+  IF v_current_course_slug IS DISTINCT FROM p_course_slug
+     AND NOT EXISTS (
+       SELECT 1
+         FROM fees
+        WHERE student_id = p_student_id
+          AND course_slug = p_course_slug
+     ) THEN
+    RAISE EXCEPTION 'student is not enrolled in this course'
+      USING ERRCODE = '22023';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+      FROM payments p
+     WHERE p.student_id = p_student_id
+       AND p.course_slug = p_course_slug
+    UNION ALL
+    SELECT 1
+      FROM payments p
+      JOIN fee_installments fi ON fi.id = p.installment_id
+      JOIN fees f ON f.id = fi.fee_id
+     WHERE f.student_id = p_student_id
+       AND f.course_slug = p_course_slug
+  ) THEN
+    RAISE EXCEPTION 'course has payment history and cannot be removed'
+      USING ERRCODE = '23503';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+      FROM certificates
+     WHERE student_id = p_student_id
+       AND course_slug = p_course_slug
+  ) THEN
+    RAISE EXCEPTION 'course has certificate records and cannot be removed'
+      USING ERRCODE = '23503';
+  END IF;
+
+  DELETE FROM fees
+   WHERE student_id = p_student_id
+     AND course_slug = p_course_slug;
+
+  IF v_current_course_slug = p_course_slug THEN
+    SELECT course_slug INTO v_next_course_slug
+      FROM fees
+     WHERE student_id = p_student_id
+       AND course_slug IS NOT NULL
+     ORDER BY created_at
+     LIMIT 1;
+
+    UPDATE students
+       SET course_slug = v_next_course_slug
+     WHERE id = p_student_id;
+  END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION public.remove_student_course(text, text) IS
+  'Removes one student course enrollment and its unpaid fee schedule atomically. Refuses if payment or certificate history exists.';
+
+REVOKE ALL ON FUNCTION public.remove_student_course(text, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.remove_student_course(text, text) TO service_role;
+ALTER FUNCTION public.remove_student_course(text, text) OWNER TO postgres;
 
 CREATE OR REPLACE FUNCTION public.guard_student_columns()
 RETURNS trigger
@@ -1081,7 +1437,7 @@ DECLARE
   -- revenue by branch, and a payment with no branch on it silently drops out of
   -- that breakdown — which is what used to happen to every payment written here,
   -- because the column was only ever filled in by the browser.
-  v_branch uuid;
+  v_branch text;
   v_remaining numeric;
   v_available numeric;
   v_line_paid numeric;
@@ -1099,6 +1455,10 @@ BEGIN
 
   IF p_amount IS NULL OR p_amount <= 0 THEN
     RAISE EXCEPTION 'the amount paid must be greater than zero' USING ERRCODE = '22023';
+  END IF;
+
+  IF p_amount <> trunc(p_amount) THEN
+    RAISE EXCEPTION 'the payment amount must be a whole number of rupees' USING ERRCODE = '22023';
   END IF;
 
   IF COALESCE(p_status, '') NOT IN ('Paid', 'Pending') THEN
@@ -1191,6 +1551,10 @@ BEGIN
 
     v_take := LEAST(ROUND(v_inst.amount - v_line_paid, 2), v_remaining);
     CONTINUE WHEN v_take <= 0;
+    IF v_take <> trunc(v_take) THEN
+      RAISE EXCEPTION 'this installment schedule has a fractional rupee balance and cannot accept whole-rupee payments'
+        USING ERRCODE = '22023';
+    END IF;
 
     v_new_id := public.next_payment_code(EXTRACT(YEAR FROM v_when)::integer);
 
@@ -1492,6 +1856,11 @@ BEGIN
     RAISE EXCEPTION '% has already been paid', v_inst.label USING ERRCODE = '22023';
   END IF;
 
+  IF v_balance <> trunc(v_balance) THEN
+    RAISE EXCEPTION 'this installment has a fractional rupee balance and cannot accept a whole-rupee payment'
+      USING ERRCODE = '22023';
+  END IF;
+
   SELECT * INTO v_fee FROM fees WHERE id = v_inst.fee_id;
   SELECT * INTO v_stud FROM students WHERE id = v_fee.student_id;
 
@@ -1593,6 +1962,8 @@ DROP FUNCTION IF EXISTS public.replace_installment_plan(uuid, integer);
 
 GRANT EXECUTE ON FUNCTION public.create_fee_schedule(uuid, numeric[], date)
   TO service_role;
+GRANT EXECUTE ON FUNCTION public.add_student_fee_installment(text, uuid, uuid, numeric, text, date)
+  TO service_role;
 GRANT EXECUTE ON FUNCTION public.apply_fee_delta(uuid, numeric, numeric)
   TO service_role;
 GRANT EXECUTE ON FUNCTION public.record_fee_payment(uuid, numeric, text, text, text, text, text)
@@ -1609,6 +1980,7 @@ GRANT EXECUTE ON FUNCTION public.unmark_installment(uuid, text, text)
   TO service_role;
 
 ALTER FUNCTION public.create_fee_schedule(uuid, numeric[], date)            OWNER TO postgres;
+ALTER FUNCTION public.add_student_fee_installment(text, uuid, uuid, numeric, text, date) OWNER TO postgres;
 ALTER FUNCTION public.apply_fee_delta(uuid, numeric, numeric)                     OWNER TO postgres;
 ALTER FUNCTION public.record_fee_payment(uuid, numeric, text, text, text, text, text) OWNER TO postgres;
 ALTER FUNCTION public.record_fee_payment_at(uuid, numeric, text, text, text, text, text, date) OWNER TO postgres;
@@ -1621,7 +1993,7 @@ DO $$
 DECLARE
   t text;
   all_tables text[] := ARRAY[
-    'courses', 'students', 'teachers', 'admins', 'fees',
+    'courses', 'students', 'student_legacy', 'teachers', 'admins', 'fees',
     'fee_installments', 'fee_extras', 'payments',
     'certificates', 'videos', 'transactions',
     'faculty', 'rate_limit_log', 'branches'
@@ -1632,14 +2004,14 @@ BEGIN
   END LOOP;
 END $$;
 
-GRANT SELECT ON TABLE courses, faculty TO anon;
+GRANT SELECT ON TABLE courses, faculty, branches TO anon;
 
 GRANT SELECT ON TABLE videos TO anon;
 
 GRANT SELECT ON TABLE
-  courses, students, teachers, admins, fees, fee_installments,
+  courses, students, student_legacy, teachers, admins, fees, fee_installments,
   fee_extras, payments, certificates, faculty,
-  videos, transactions
+  videos, transactions, branches
 TO authenticated;
 
 GRANT INSERT ON TABLE payments, certificates TO authenticated;
@@ -1648,13 +2020,13 @@ GRANT UPDATE ON TABLE students, fees TO authenticated;
 GRANT INSERT, UPDATE, DELETE ON TABLE
   courses, students, teachers, admins, fees, fee_installments,
   fee_extras, payments, certificates, videos,
-  transactions, faculty
+  transactions, faculty, branches
 TO authenticated;
 
 GRANT ALL ON TABLE
-  courses, students, teachers, admins, fees, fee_installments,
+  courses, students, student_legacy, teachers, admins, fees, fee_installments,
   fee_extras, payments, certificates, videos,
-  transactions, faculty, rate_limit_log
+  transactions, faculty, rate_limit_log, branches
 TO service_role;
 
 GRANT USAGE, SELECT ON SEQUENCE public.rate_limit_log_id_seq TO service_role;
@@ -1664,7 +2036,7 @@ DECLARE
   t text;
   stmt text;
   all_tables text[] := ARRAY[
-    'courses', 'students', 'teachers', 'admins', 'fees',
+    'courses', 'students', 'student_legacy', 'teachers', 'admins', 'fees',
     'fee_installments', 'fee_extras', 'payments',
     'certificates', 'videos', 'transactions',
     'faculty', 'rate_limit_log', 'branches'
@@ -1701,6 +2073,11 @@ BEGIN
     );
   END LOOP;
 END $$;
+
+-- Student legacy is read-only for admins, not exposed to public
+ALTER TABLE student_legacy ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Admins read student_legacy" ON student_legacy FOR SELECT TO authenticated
+  USING (public.is_admin());
 
 -- Branches are the institute's own campus list. Readable by anyone, because the
 -- public course pages name the campus a course runs at; writable only by admins.
