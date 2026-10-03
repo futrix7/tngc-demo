@@ -5,10 +5,9 @@ import Link from "next/link"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Label } from "@/components/ui/label"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { ArrowLeft, Award, Printer, CheckCircle2, Clock, Eye, Send, Loader2, XCircle, Hourglass } from "lucide-react"
+import { ArrowLeft, Award, Printer, CheckCircle2, Clock, Eye, Loader2, XCircle, Hourglass } from "lucide-react"
 import { useToast } from "@/components/ui/sonner"
 import { supabase } from "@/lib/supabase"
 import {
@@ -17,7 +16,6 @@ import {
   getCertificateCourseName,
   printCertificate,
 } from "@/lib/certificate-print"
-import { mintId } from "@/lib/mint-id"
 import { QueryError } from "@/components/student/data-state"
 
 /** Every value the `certificate_status` enum can hold. */
@@ -36,11 +34,6 @@ interface Certificate {
   status: CertificateStatus
   issuedBy: string
   type: "Completion" | "Proficiency" | "Module"
-}
-
-interface EligibleCourse {
-  slug: string
-  name: string
 }
 
 /**
@@ -64,12 +57,7 @@ export default function StudentCertificates() {
   const [certificates, setCertificates] = useState<Certificate[]>([])
   const [loading, setLoading] = useState(true)
   const [studentName, setStudentName] = useState("")
-  const [eligibleCourses, setEligibleCourses] = useState<EligibleCourse[]>([])
   const [tab, setTab] = useState("all")
-  const [reqOpen, setReqOpen] = useState(false)
-  const [reqCourseSlug, setReqCourseSlug] = useState("")
-  const [reqType, setReqType] = useState("Completion")
-  const [reqNotes, setReqNotes] = useState("")
   const [viewCert, setViewCert] = useState<Certificate | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [attempt, setAttempt] = useState(0)
@@ -99,66 +87,6 @@ export default function StudentCertificates() {
       }
 
       setStudentName(student.full_name)
-
-      const { data: feeRows, error: feeError } = await supabase
-        .from("fees")
-        .select("id, course_slug, pending_amount")
-        .eq("student_id", student.id)
-
-      const { data: existingCerts, error: certLookupError } = await supabase
-        .from("certificates")
-        .select("course_slug, status")
-        .eq("student_id", student.id)
-
-      if (certLookupError) {
-        console.error("[certificates] existing certificate lookup failed:", certLookupError.message)
-      }
-
-      const usedCourseSlugs = new Set(
-        (existingCerts || [])
-          .filter((course) => course.course_slug && ["Issued", "Requested", "Processing", "Pending"].includes(course.status))
-          .map((course) => course.course_slug)
-      )
-
-      if (feeError) {
-        console.error("[certificates] fee eligibility lookup failed:", feeError.message)
-        setEligibleCourses([])
-      } else if (feeRows && feeRows.length > 0) {
-        const courseSlugs = [...new Set(feeRows.map((fee) => fee.course_slug).filter((slug): slug is string => Boolean(slug)))]
-        const [schedulesResult, coursesResult] = await Promise.all([
-          supabase
-            .from("fee_installments")
-            .select("fee_id, status")
-            .in("fee_id", feeRows.map((fee) => fee.id)),
-          courseSlugs.length
-            ? supabase.from("courses").select("slug, name").in("slug", courseSlugs)
-            : Promise.resolve({ data: [], error: null }),
-        ])
-
-        if (schedulesResult.error || coursesResult.error) {
-          console.error(
-            "[certificates] course eligibility lookup failed:",
-            schedulesResult.error?.message ?? coursesResult.error?.message
-          )
-          setEligibleCourses([])
-        } else {
-          const courseNames = new Map((coursesResult.data ?? []).map((course) => [course.slug, course.name]))
-          const eligible = feeRows
-            .filter((fee) => {
-              if (!fee.course_slug || Number(fee.pending_amount) > 0 || usedCourseSlugs.has(fee.course_slug)) return false
-              const courseInstallments = (schedulesResult.data ?? []).filter((item) => item.fee_id === fee.id)
-              return courseInstallments.length > 0 && courseInstallments.every((item) => item.status === "Paid")
-            })
-            .map((fee) => ({
-              slug: fee.course_slug as string,
-              name: courseNames.get(fee.course_slug as string) ?? fee.course_slug as string,
-            }))
-          setEligibleCourses(eligible)
-          setReqCourseSlug((current) => eligible.some((course) => course.slug === current) ? current : "")
-        }
-      } else {
-        setEligibleCourses([])
-      }
 
       const { data, error } = await supabase
         .from("certificates")
@@ -238,72 +166,6 @@ export default function StudentCertificates() {
     }
   }
 
-  const handleRequest = async () => {
-    const eligibleCourse = eligibleCourses.find((course) => course.slug === reqCourseSlug)
-    if (!eligibleCourse) {
-      toast("Choose a course with all installments paid.", { variant: "warning" })
-      return
-    }
-
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) {
-      toast("Please log in", { variant: "destructive" })
-      return
-    }
-
-    const { data: student } = await supabase
-      .from("students")
-      .select("id, full_name")
-      .eq("user_id", user.id)
-      .single()
-
-    if (!student) {
-      toast("Student profile not found", { variant: "destructive" })
-      return
-    }
-
-    const { data: existingCertificate, error: existingError } = await supabase
-      .from("certificates")
-      .select("id")
-      .eq("student_id", student.id)
-      .eq("course_slug", eligibleCourse.slug)
-      .in("status", ["Issued", "Requested", "Processing", "Pending"])
-      .limit(1)
-      .maybeSingle()
-
-    if (existingError && existingError.code !== "PGRST116") {
-      toast("Failed to validate existing certificates: " + existingError.message, { variant: "destructive" })
-      return
-    }
-
-    if (existingCertificate) {
-      toast("You already have a certificate request or certificate for this course.", { variant: "warning" })
-      return
-    }
-
-    const { error } = await supabase.from("certificates").insert({
-      id: mintId("CERT"),
-      student_id: student.id,
-      student_name: student.full_name,
-      course_slug: eligibleCourse.slug,
-      name: `${eligibleCourse.name} ${reqType} Certificate`,
-      type: reqType,
-      status: "Requested",
-    })
-
-    if (error) {
-      toast("Failed to submit request: " + error.message, { variant: "destructive" })
-      return
-    }
-
-    toast(`${reqType} certificate requested for ${eligibleCourse.name}`, { variant: "success" })
-    setReqOpen(false)
-    setReqCourseSlug("")
-    setReqType("Completion")
-    setReqNotes("")
-    fetchCertificates()
-  }
-
   if (loading) {
     return (
       <div className="flex items-center justify-center p-8">
@@ -340,65 +202,9 @@ export default function StudentCertificates() {
           <h1 className="text-lg sm:text-xl font-bold">Certificates</h1>
           <p className="text-xs sm:text-sm text-muted-foreground">{issued} certificates issued</p>
         </div>
-        {eligibleCourses.length > 0 ? (
-          <Dialog open={reqOpen} onOpenChange={setReqOpen}>
-            <DialogTrigger render={<Button size="sm" className="gap-1" />}>
-              <Send className="size-3" />
-              Request
-            </DialogTrigger>
-            <DialogContent className="w-[calc(100%-1rem)] max-w-[calc(100%-1rem)] max-h-[85dvh] overflow-y-auto sm:max-w-lg">
-              <DialogHeader>
-                <DialogTitle>Request a Certificate</DialogTitle>
-              </DialogHeader>
-              <div className="space-y-4 pt-2">
-                <div className="space-y-2">
-                  <Label htmlFor="certificate-course">Completed Course</Label>
-                  <select
-                    id="certificate-course"
-                    value={reqCourseSlug}
-                    onChange={(event) => setReqCourseSlug(event.target.value)}
-                    className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-                  >
-                    <option value="">Choose a completed course</option>
-                    {eligibleCourses.map((course) => (
-                      <option key={course.slug} value={course.slug}>{course.name}</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="space-y-2">
-                  <Label>Certificate Type</Label>
-                  <select
-                    value={reqType}
-                    onChange={(e) => setReqType(e.target.value)}
-                    className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-                  >
-                    <option>Completion</option>
-                    <option>Proficiency</option>
-                    <option>Module</option>
-                  </select>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="req-notes">Reason / Notes</Label>
-                  <textarea
-                    id="req-notes"
-                    value={reqNotes}
-                    onChange={(e) => setReqNotes(e.target.value)}
-                    rows={3}
-                    placeholder="Why do you need this certificate?"
-                    className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm resize-none"
-                  />
-                </div>
-                <Button className="w-full" onClick={handleRequest} disabled={!reqCourseSlug}>
-                  Submit Request
-                </Button>
-              </div>
-            </DialogContent>
-          </Dialog>
-        ) : (
-          <p className="text-xs text-muted-foreground sm:max-w-56 sm:text-right">
-            Complete a course&rsquo;s installments to request its certificate.
-          </p>
-        )}
+        <p className="text-xs text-muted-foreground sm:max-w-56 sm:text-right">
+          Certificates are issued by the administration.
+        </p>
       </div>
 
       {/* Stats */}

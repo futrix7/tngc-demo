@@ -2501,40 +2501,7 @@ END $$;
 
 CREATE POLICY "Students read own certificates" ON certificates FOR SELECT TO authenticated
   USING (student_id = public.current_student_id());
-CREATE POLICY "Students request own certificates" ON certificates FOR INSERT TO authenticated
-  WITH CHECK (
-    student_id = public.current_student_id()
-    AND certificates.course_slug IS NOT NULL
-    AND EXISTS (
-      SELECT 1 FROM fees f
-       WHERE f.student_id = public.current_student_id()
-         AND f.course_slug = certificates.course_slug
-    )
-    AND NOT EXISTS (
-      SELECT 1
-        FROM fees f
-       WHERE f.student_id = public.current_student_id()
-         AND f.course_slug = certificates.course_slug
-         AND (
-           COALESCE(f.pending_amount, 0) > 0
-           OR NOT EXISTS (
-             SELECT 1 FROM fee_installments fi WHERE fi.fee_id = f.id
-           )
-           OR EXISTS (
-             SELECT 1
-               FROM fee_installments fi
-              WHERE fi.fee_id = f.id AND fi.status <> 'Paid'
-           )
-         )
-    )
-    AND NOT EXISTS (
-      SELECT 1
-        FROM certificates c
-       WHERE c.student_id = public.current_student_id()
-         AND c.course_slug = certificates.course_slug
-         AND c.status IN ('Issued', 'Requested', 'Processing', 'Pending')
-    )
-  );
+DROP POLICY IF EXISTS "Students request own certificates" ON certificates;
 CREATE POLICY "Admins full access" ON certificates FOR ALL TO authenticated
   USING (public.is_admin()) WITH CHECK (public.is_admin());
 

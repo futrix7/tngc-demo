@@ -140,28 +140,31 @@ export function Staff() {
 
         const rows = uniqueFaculty(data as FacultyRow[]).map((faculty) => {
           if (/nadiya/i.test(faculty.name)) {
-            return { ...faculty, role: "Director", is_founder: false }
+            return { ...faculty, name: "Nadiya", role: "Director", is_founder: false }
           }
-          if (/mada.*eswar|eswar.*mada/i.test(faculty.name)) {
+          if (/mada.*eswar|eswar.*mada/i.test(faculty.name) || /founder/i.test(faculty.role)) {
             return { ...faculty, role: "Founder", is_founder: true }
           }
           return faculty
         })
-        if (!rows.some((faculty) => /founder/i.test(faculty.role))) {
-          const founder = fallbackFaculty.find((faculty) => /founder/i.test(faculty.role))
-          if (founder) rows.push(founder)
+        const directorRecord = rows.find((faculty) => /nadiya/i.test(faculty.name))
+        const preferredDirector = {
+          ...fallbackFaculty[0],
+          ...(directorRecord ?? {}),
+          name: "Nadiya",
+          role: "Director",
+          is_founder: false,
         }
-        const preferredDirector =
-          rows.find((f) => /nadiya/i.test(f.name)) ??
-          rows.find((f) => /director/i.test(f.role)) ??
-          rows[0] ??
-          null
+        if (!rows.some((faculty) => /founder/i.test(faculty.role))) {
+          rows.push(fallbackFaculty[1])
+        }
 
         setDirector(preferredDirector)
         setMembers(
           rows.filter(
             (f) =>
-              f.id !== preferredDirector?.id &&
+              !/nadiya/i.test(f.name) &&
+              !/director/i.test(f.role) &&
               (/founder/i.test(f.role) || /trainer/i.test(f.role))
           )
         )
@@ -174,10 +177,7 @@ export function Staff() {
 
     function applyFallback() {
       const preferredDirector =
-        fallbackFaculty.find((f) => /nadiya/i.test(f.name)) ??
-        fallbackFaculty.find((f) => /director/i.test(f.role)) ??
-        fallbackFaculty[0] ??
-        null
+        fallbackFaculty.find((f) => /nadiya/i.test(f.name)) ?? fallbackFaculty[0]
 
       setDirector(preferredDirector)
       setMembers(

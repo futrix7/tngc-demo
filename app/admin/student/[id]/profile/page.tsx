@@ -8,6 +8,7 @@ import { useStudent } from "../layout"
 
 interface ProfileData {
   dob: string
+  gender: string
   address: string
   batchTime: string
   fatherName: string
@@ -37,7 +38,7 @@ export default function StudentProfilePage() {
 
       const { data, error: profileError } = await supabase
         .from("students")
-        .select("date_of_birth, address, batch_time, father_name, father_phone, mother_name, enrollment_date")
+        .select("date_of_birth, gender, address, batch_time, father_name, father_phone, mother_name, enrollment_date")
         .eq("id", student!.id)
         .maybeSingle()
 
@@ -60,6 +61,7 @@ export default function StudentProfilePage() {
 
       setProfile({
         dob: data.date_of_birth ?? "",
+        gender: data.gender ?? "",
         address: data.address ?? "",
         batchTime: data.batch_time ?? "",
         fatherName: data.father_name ?? "",
@@ -98,6 +100,7 @@ export default function StudentProfilePage() {
               { icon: Mail, label: "Email", value: student.email },
               { icon: Phone, label: "Phone", value: student.phone },
               { icon: Calendar, label: "Date of Birth", value: displayDate(profile.dob) },
+              { icon: UserCircle, label: "Gender", value: profile.gender },
               { icon: MapPin, label: "Address", value: profile.address },
             ].map((row) => (
               <div key={row.label} className="flex min-w-0 items-start gap-3 py-3">

@@ -3,8 +3,6 @@ import { authenticateAdminRequest, isSupabaseAdminConfigured, supabaseAdmin } fr
 import { describeRpcFailure, failureResponse } from "@/lib/api-response"
 import {
   checkAmountAgainstTotal,
-  checkAmountSplitAgainst,
-  parseAmountSplit,
   parsePaymentAmount,
 } from "@/lib/amount-split"
 
@@ -31,18 +29,13 @@ export async function POST(request: Request) {
 
   const studentId = typeof body.studentId === "string" ? body.studentId.trim() : ""
   const courseSlug = typeof body.courseSlug === "string" ? body.courseSlug.trim() : ""
-  // The course total is owned by the catalog. A caller may supply how that price
-  // is scheduled and an optional amount actually collected now, but not a new
-  // total fee.
-  const installmentSplit = parseAmountSplit(body.installmentAmounts)
+  // The course total comes from the catalog. Any partial collection is kept as
+  // a single custom payment, with the remaining fee left pending.
   const paidNow = parsePaymentAmount(body.paymentAmount)
   const paymentMethod = typeof body.paymentMethod === "string" ? body.paymentMethod : "upi"
   const paymentReference = typeof body.paymentReference === "string" ? body.paymentReference.trim() : ""
   if (!studentId || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(courseSlug)) {
     return NextResponse.json({ error: "Choose a valid student and course." }, { status: 400 })
-  }
-  if (installmentSplit.error) {
-    return NextResponse.json({ error: installmentSplit.error }, { status: 400 })
   }
   if (paidNow.error) {
     return NextResponse.json({ error: paidNow.error }, { status: 400 })
@@ -71,11 +64,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "The selected course does not have a valid catalog fee." }, { status: 409 })
   }
 
-  const scheduleError = checkAmountSplitAgainst(installmentSplit.amounts, totalFee)
-  if (scheduleError) {
-    return NextResponse.json({ error: scheduleError }, { status: 400 })
-  }
-
   const paymentError = checkAmountAgainstTotal(paidNow.amount, totalFee)
   if (paymentError) {
     return NextResponse.json({ error: paymentError }, { status: 400 })
@@ -99,7 +87,7 @@ export async function POST(request: Request) {
     p_course_slug: courseSlug,
     p_student_id: student.id,
     p_total_fee_override: null,
-    p_installment_amounts: installmentSplit.amounts,
+    p_installment_amounts: null,
     p_payment_amount: null,
     p_verified_by: auth.userId,
   })

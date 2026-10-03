@@ -13,10 +13,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import { Loader2 } from "lucide-react"
 import {
   UserCircle,
@@ -25,8 +22,6 @@ import {
   MapPin,
   Calendar,
   BookOpen,
-  Edit,
-  Camera,
   LogOut,
   ChevronRight,
   CreditCard,
@@ -84,11 +79,6 @@ export default function StudentProfile() {
   const { signOut } = useAuthState()
   const [profile, setProfile] = useState<Profile>(fallbackProfile)
   const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const [editOpen, setEditOpen] = useState(false)
-  const [editName, setEditName] = useState("")
-  const [editEmail, setEditEmail] = useState("")
-  const [editAddress, setEditAddress] = useState("")
   const [loadError, setLoadError] = useState<string | null>(null)
   const [attempt, setAttempt] = useState(0)
   const [signingOut, setSigningOut] = useState(false)
@@ -168,53 +158,11 @@ export default function StudentProfile() {
           status: s.status ?? "Not set",
         }
         setProfile(p)
-        setEditName(p.name)
-        setEditEmail(s.email ?? "")
-        setEditAddress(p.address)
       }
       setLoading(false)
     }
     fetchProfile()
   }, [attempt])
-
-  const handleSave = async () => {
-    if (!editName.trim()) {
-      toast("Name is required", { variant: "destructive" })
-      return
-    }
-    setSaving(true)
-
-    const { error } = await supabase
-      .from("students")
-      .update({
-        full_name: editName,
-        email: editEmail.trim() || null,
-        address: editAddress || null,
-      })
-      .eq("id", profile.id)
-
-    if (error) {
-      toast("Failed to save profile: " + error.message, { variant: "destructive" })
-      setSaving(false)
-      return
-    }
-
-    await supabase.auth.updateUser({
-      data: { full_name: editName },
-    })
-
-    setProfile({ ...profile, name: editName, email: editEmail.trim() || "—", address: editAddress })
-    setEditOpen(false)
-    setSaving(false)
-    toast("Profile updated successfully", { variant: "success" })
-  }
-
-  const handleCancel = () => {
-    setEditName(profile.name)
-    setEditEmail(profile.email)
-    setEditAddress(profile.address)
-    setEditOpen(false)
-  }
 
   if (loading) {
     return (
@@ -258,58 +206,11 @@ export default function StudentProfile() {
               <div className="flex size-18 sm:size-20 items-center justify-center rounded-full border-4 border-background bg-muted text-xl sm:text-2xl font-bold" style={{ width: "5rem", height: "5rem" }}>
                 {profile.name.split(" ").map((n) => n[0]).join("")}
               </div>
-              <button className="absolute bottom-0 right-0 size-9 rounded-full bg-primary text-primary-foreground flex items-center justify-center">
-                <Camera className="size-4" />
-              </button>
             </div>
             <div className="flex-1 text-center sm:text-left pb-1">
               <h1 className="text-lg sm:text-xl font-bold">{profile.name}</h1>
               <p className="text-xs text-muted-foreground">{profile.id}</p>
             </div>
-            <Dialog open={editOpen} onOpenChange={setEditOpen}>
-              <DialogTrigger render={<Button variant="outline" size="sm" className="gap-1.5 self-center sm:self-auto" />}>
-                <Edit className="size-3.5" />
-                <span className="hidden sm:inline">Edit Profile</span>
-                <span className="sm:hidden">Edit</span>
-              </DialogTrigger>
-              <DialogContent className="sm:max-w-md">
-                <DialogHeader>
-                  <DialogTitle>Edit Profile</DialogTitle>
-                </DialogHeader>
-                <div className="space-y-4 mt-2">
-                  <div className="space-y-2">
-                    <Label htmlFor="edit-name">Full Name</Label>
-                    <Input id="edit-name" value={editName} onChange={(e) => setEditName(e.target.value)} />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="edit-email">Email</Label>
-                    <Input id="edit-email" type="email" value={editEmail} onChange={(e) => setEditEmail(e.target.value)} />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="profile-phone">Phone (login number)</Label>
-                    <Input id="profile-phone" value={profile.phone} readOnly />
-                    <p className="text-xs text-muted-foreground">Contact administration to change the sign-in number.</p>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="edit-address">Address</Label>
-                    <Input id="edit-address" value={editAddress} onChange={(e) => setEditAddress(e.target.value)} />
-                  </div>
-                  <div className="flex gap-2 justify-end">
-                    <Button variant="outline" onClick={handleCancel} disabled={saving}>Cancel</Button>
-                    <Button onClick={handleSave} disabled={saving}>
-                      {saving ? (
-                        <>
-                          <Loader2 className="size-4 animate-spin" />
-                          Saving...
-                        </>
-                      ) : (
-                        "Save Changes"
-                      )}
-                    </Button>
-                  </div>
-                </div>
-              </DialogContent>
-            </Dialog>
           </div>
           <div className="mt-3 flex flex-wrap gap-1.5 sm:gap-2 justify-center sm:justify-start">
             <Badge variant="secondary" className="text-[11px] sm:text-xs">{profile.course}</Badge>

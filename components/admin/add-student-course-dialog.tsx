@@ -6,9 +6,6 @@ import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-// The schedule split only. A payment is one figure, so nothing here needs a
-// second set of parts to keep in step.
-import { AmountSplit, MAX_SPLIT_PARTS, readAmountParts, sumAmountParts } from "@/components/shared/amount-split"
 import { supabase } from "@/lib/supabase"
 import { useToast } from "@/components/ui/sonner"
 import { parsePaymentAmount } from "@/lib/amount-split"
@@ -34,7 +31,6 @@ export function AddStudentCourseDialog({
   const [courses, setCourses] = useState<CourseOption[]>([])
   const [search, setSearch] = useState("")
   const [selectedSlug, setSelectedSlug] = useState("")
-  const [installmentAmounts, setInstallmentAmounts] = useState<string[]>([""])
   const [amountPaidNow, setAmountPaidNow] = useState("")
   const [paymentMethod, setPaymentMethod] = useState("cash")
   const [paymentReference, setPaymentReference] = useState("")
@@ -75,23 +71,6 @@ export function AddStudentCourseDialog({
       return false
     }
 
-    const schedule = readAmountParts(installmentAmounts)
-    if (schedule.error) {
-      toast(schedule.error, { variant: "destructive" })
-      return false
-    }
-
-    if (schedule.amounts.length > 0) {
-      const sum = Number(sumAmountParts(installmentAmounts).toFixed(2))
-      if (Math.abs(sum - totalFee) > 0.005) {
-        toast(
-          `The installments must add up to ₹${totalFee.toLocaleString("en-IN")}. They add up to ₹${sum.toLocaleString("en-IN")}.`,
-          { variant: "destructive" }
-        )
-        return false
-      }
-    }
-
     const parsedPayment = parsePaymentAmount(amountPaidNow.trim() === "" ? null : amountPaidNow)
     const paidNow = parsedPayment.amount
     if (parsedPayment.error) {
@@ -110,7 +89,6 @@ export function AddStudentCourseDialog({
 
   async function addCourse() {
     if (!selectedCourse || saving || !validateCourse()) return
-    const schedule = readAmountParts(installmentAmounts)
     const paidNow = parsePaymentAmount(amountPaidNow.trim() === "" ? null : amountPaidNow).amount
 
     setSaving(true)
@@ -128,7 +106,6 @@ export function AddStudentCourseDialog({
         body: JSON.stringify({
           studentId,
           courseSlug: selectedCourse.slug,
-          installmentAmounts: schedule.amounts.length > 0 ? schedule.amounts : null,
           paymentAmount: paidNow,
           paymentMethod,
           paymentReference,
@@ -149,7 +126,6 @@ export function AddStudentCourseDialog({
           setAmountPaidNow("")
           setPaymentReference("")
           setPaymentMethod("cash")
-          setInstallmentAmounts([""])
           onSuccess(selectedCourse.name)
           return
         }
@@ -159,8 +135,8 @@ export function AddStudentCourseDialog({
 
       toast(
         paidNow === null
-          ? `${selectedCourse.name} added. Record payments from the Installments page.`
-          : `${selectedCourse.name} added and ₹${paidNow.toLocaleString("en-IN")} payment recorded.`,
+          ? `${selectedCourse.name} added. The full course fee remains pending.`
+          : `${selectedCourse.name} added. ₹${paidNow.toLocaleString("en-IN")} recorded; the balance remains pending.`,
         { variant: "success" }
       )
       setOpen(false)
@@ -168,7 +144,6 @@ export function AddStudentCourseDialog({
       setAmountPaidNow("")
       setPaymentReference("")
       setPaymentMethod("cash")
-      setInstallmentAmounts([""])
       onSuccess(selectedCourse.name)
     } catch {
       toast("Unable to add course. Please try again.", { variant: "destructive" })
@@ -214,7 +189,6 @@ export function AddStudentCourseDialog({
                   aria-pressed={selectedSlug === course.slug}
                   onClick={() => {
                     setSelectedSlug(course.slug)
-                    setInstallmentAmounts([""])
                     setAmountPaidNow("")
                     setPaymentMethod("cash")
                     setPaymentReference("")
@@ -244,19 +218,8 @@ export function AddStudentCourseDialog({
                   {selectedCourse ? `₹${totalFee.toLocaleString("en-IN")}` : "Choose a course"}
                 </p>
               </div>
-              {selectedCourse && (
-                <AmountSplit
-                  compact
-                  values={installmentAmounts}
-                  onChange={setInstallmentAmounts}
-                  label="Installments"
-                  target={totalFee || null}
-                  partLabels={Array.from({ length: Math.max(installmentAmounts.length, 1) }, (_, i) => `Installment ${i + 1}`)}
-                  hint={`Up to ${MAX_SPLIT_PARTS}, in your own amounts. Blank keeps the fee as one line — nothing is divided for you.`}
-                />
-              )}
               <div className="space-y-2">
-                <Label htmlFor="student-course-paid-now">Amount paid now (optional)</Label>
+                <Label htmlFor="student-course-paid-now">Custom amount collected now (optional)</Label>
                 <Input
                   id="student-course-paid-now"
                   type="number"
@@ -269,7 +232,21 @@ export function AddStudentCourseDialog({
                   placeholder="Leave blank if collecting later"
                   disabled={!selectedCourse}
                 />
+                <p className="text-xs text-muted-foreground">
+                  Enter the amount collected now. Any remaining course fee stays pending.
+                </p>
               </div>
+              {selectedCourse && (
+                <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-amber-950 dark:border-amber-700/60 dark:bg-amber-950/30 dark:text-amber-100">
+                  <div className="flex items-center justify-between gap-3 text-sm">
+                    <span>Pending after this payment</span>
+                    <strong>
+                      ₹{Math.max(0, totalFee - (Number(amountPaidNow) || 0)).toLocaleString("en-IN")}
+                    </strong>
+                  </div>
+                  <p className="mt-1 text-xs opacity-80">This balance remains due; it is not split into installments here.</p>
+                </div>
+              )}
               {amountPaidNow.trim() !== "" && Number(amountPaidNow) > 0 && (
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div className="space-y-2">

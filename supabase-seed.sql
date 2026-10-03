@@ -61,7 +61,7 @@ BEGIN
 
   IF NOT EXISTS (SELECT 1 FROM public.faculty) THEN
     INSERT INTO faculty (name, role, branch, qualifications, description, is_founder) VALUES
-      ('Mr. Mada Nadiya', 'Director', 'Ramanthapur', ARRAY['MBA','Degree'], 'The Director of The New Generation Computers, guiding students with experience, discipline, and a strong training culture.', false),
+      ('Nadiya', 'Director', 'Ramanthapur', ARRAY['MBA','Degree'], 'The Director of The New Generation Computers, guiding students with experience, discipline, and a strong training culture.', false),
       ('Mada Eswar', 'Founder', 'Ramanthapur', ARRAY[]::text[], NULL, true),
       ('Mr G Madhavrao', 'Coding Trainer', 'Ramanthapur', ARRAY['Coding Trainer'], NULL, false),
       ('Mr M Harish Kumar', 'Computer Trainer', 'Ramanthapur', ARRAY['Computer Trainer'], NULL, false);

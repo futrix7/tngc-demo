@@ -16,11 +16,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { ArrowLeft, Mail, Phone, Trash2, Loader2, User, Wallet, CreditCard, Award, IndianRupee, KeyRound, BookOpen } from "lucide-react"
+import { ArrowLeft, Mail, Phone, Trash2, Loader2, User, Wallet, CreditCard, Award, IndianRupee, KeyRound, BookOpen, Pencil } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { supabase } from "@/lib/supabase"
 import { useToast } from "@/components/ui/sonner"
 import { AddStudentCourseDialog } from "@/components/admin/add-student-course-dialog"
+import { EditStudentSheet, type EditableStudentDetails } from "@/components/admin/edit-student-sheet"
 import { PasswordVisibilityToggle } from "@/components/auth/password-visibility-toggle"
 
 interface StudentData {
@@ -34,6 +35,14 @@ interface StudentData {
   isLegacyImport: boolean
   branch: string
   status: "Active" | "Inactive" | "Pending" | null
+  dateOfBirth: string
+  gender: string
+  address: string
+  fatherName: string
+  fatherPhone: string
+  motherName: string
+  batchTime: string
+  enrollmentDate: string
 }
 
 const StudentContext = createContext<StudentData | null>(null)
@@ -80,6 +89,7 @@ export default function StudentLayout({
   const [student, setStudent] = useState<StudentData | null>(null)
   const [loading, setLoading] = useState(true)
   const [notFound, setNotFound] = useState(false)
+  const [editOpen, setEditOpen] = useState(false)
 
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleteName, setDeleteName] = useState("")
@@ -98,7 +108,7 @@ export default function StudentLayout({
     async function fetchStudent() {
       const { data, error } = await supabase
         .from("students")
-        .select("id, full_name, email, phone, course_slug, legacy_course_label, is_legacy_import, branch_id, status")
+        .select("id, full_name, email, phone, date_of_birth, gender, address, father_name, father_phone, mother_name, batch_time, enrollment_date, course_slug, legacy_course_label, is_legacy_import, branch_id, status")
         .eq("id", id)
         .single()
 
@@ -146,6 +156,14 @@ export default function StudentLayout({
         isLegacyImport: data.is_legacy_import,
         branch: branchName,
         status: data.status as StudentData["status"],
+        dateOfBirth: data.date_of_birth ?? "",
+        gender: data.gender ?? "",
+        address: data.address ?? "",
+        fatherName: data.father_name ?? "",
+        fatherPhone: data.father_phone ?? "",
+        motherName: data.mother_name ?? "",
+        batchTime: data.batch_time ?? "",
+        enrollmentDate: data.enrollment_date ?? "",
       })
       setLoading(false)
     }
@@ -153,6 +171,23 @@ export default function StudentLayout({
   }, [id])
 
   const deleteEnabled = student && deleteName === student.name && deleteConfirm === "DELETE"
+
+  function handleStudentDetailsSaved(details: EditableStudentDetails) {
+    setStudent((current) => current ? {
+      ...current,
+      name: details.name,
+      email: details.email,
+      phone: details.phone,
+      dateOfBirth: details.dateOfBirth,
+      gender: details.gender,
+      address: details.address,
+      fatherName: details.fatherName,
+      fatherPhone: details.fatherPhone,
+      motherName: details.motherName,
+      batchTime: details.batchTime,
+      enrollmentDate: details.enrollmentDate,
+    } : current)
+  }
 
   async function handleStatusToggle() {
     if (!student || changingStatus) return
@@ -349,10 +384,16 @@ export default function StudentLayout({
                     </div>
                   </div>
                 </div>
-                <Button className="w-full shrink-0 sm:w-auto" onClick={handleStatusToggle} disabled={changingStatus}>
-                  {changingStatus && <Loader2 className="mr-2 size-4 animate-spin" />}
-                  {changingStatus ? "Activating..." : "Activate student"}
-                </Button>
+                <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+                  <Button variant="outline" className="w-full sm:w-auto" onClick={() => setEditOpen(true)}>
+                    <Pencil className="mr-2 size-4" />
+                    Edit Details
+                  </Button>
+                  <Button className="w-full sm:w-auto" onClick={handleStatusToggle} disabled={changingStatus}>
+                    {changingStatus && <Loader2 className="mr-2 size-4 animate-spin" />}
+                    {changingStatus ? "Activating..." : "Activate student"}
+                  </Button>
+                </div>
               </div>
               <div className="flex flex-wrap gap-2 border-t pt-4">
                 <Badge variant="destructive">Deactivated</Badge>
@@ -376,6 +417,26 @@ export default function StudentLayout({
               </p>
             </CardContent>
           </Card>
+          <EditStudentSheet
+            key={`${student.id}-${editOpen}`}
+            open={editOpen}
+            onOpenChange={setEditOpen}
+            student={{
+              id: student.id,
+              name: student.name,
+              email: student.email,
+              phone: student.phone,
+              dateOfBirth: student.dateOfBirth,
+              gender: student.gender,
+              address: student.address,
+              fatherName: student.fatherName,
+              fatherPhone: student.fatherPhone,
+              motherName: student.motherName,
+              batchTime: student.batchTime,
+              enrollmentDate: student.enrollmentDate,
+            }}
+            onSaved={handleStudentDetailsSaved}
+          />
         </div>
         </RemoveStudentCourseContext.Provider>
       </StudentContext.Provider>
@@ -414,6 +475,15 @@ export default function StudentLayout({
                 </div>
               </div>
               <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:flex-wrap lg:w-auto lg:justify-end">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full gap-2 sm:w-auto"
+                  onClick={() => setEditOpen(true)}
+                >
+                  <Pencil className="size-4" />
+                  Edit Details
+                </Button>
                 <Button
                   variant="outline"
                   size="sm"
@@ -470,6 +540,26 @@ export default function StudentLayout({
             </div>
           </CardContent>
         </Card>
+        <EditStudentSheet
+          key={`${student.id}-${editOpen}`}
+          open={editOpen}
+          onOpenChange={setEditOpen}
+          student={{
+            id: student.id,
+            name: student.name,
+            email: student.email,
+            phone: student.phone,
+            dateOfBirth: student.dateOfBirth,
+            gender: student.gender,
+            address: student.address,
+            fatherName: student.fatherName,
+            fatherPhone: student.fatherPhone,
+            motherName: student.motherName,
+            batchTime: student.batchTime,
+            enrollmentDate: student.enrollmentDate,
+          }}
+          onSaved={handleStudentDetailsSaved}
+        />
 
         {/* Navigation */}
         <nav aria-label="Student sections" className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
