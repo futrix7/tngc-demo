@@ -84,7 +84,7 @@ export default function StudentLayout({ children }: { children: React.ReactNode 
         aria-label="Student portal"
         className="fixed bottom-4 left-1/2 z-40 max-w-[calc(100vw-1rem)] -translate-x-1/2 sm:bottom-6"
       >
-        <div className="flex items-center gap-0.5 rounded-full border border-border bg-card/95 p-2 shadow-lg shadow-black/5 backdrop-blur-md dark:shadow-black/30">
+        <div className="flex items-center gap-0.5 rounded-full border border-border bg-card/95 p-2 shadow-xl shadow-black/20 backdrop-blur-md dark:shadow-black/50">
           {navLinks.map((link) => {
             const active = activeHref === link.href
 

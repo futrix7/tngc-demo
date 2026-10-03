@@ -10,6 +10,7 @@ import { supabase } from "@/lib/supabase"
 import { isAwaitingVerification, isRejected, paymentStatusLabel } from "@/lib/payment-status"
 import { useStudent } from "../layout"
 import { getInstallmentPaymentTotals, getRemainingInstallmentBalance } from "@/lib/payment-balances"
+import { PaymentReceiptButton } from "@/components/shared/payment-receipt-button"
 
 interface Payment {
   id: string
@@ -22,6 +23,13 @@ interface Payment {
   /** The schedule line this money landed on, when it landed on one. */
   installment: string
   remainingBalance: number | null
+  receiptNumber: string | null
+  receiptSerial: number
+  feeAmount: number
+  paidToDate: number
+  awaitingVerification: number
+  balanceDue: number
+  verifiedAt: string | null
 }
 
 /**
@@ -56,7 +64,7 @@ export default function StudentPaymentsPage() {
       setError(null)
 
       const { data: feesRows, error: feesError } = await supabase
-        .from("fees").select("total_fee").eq("student_id", student!.id)
+        .from("fees").select("course_slug, total_fee, paid_amount, pending_amount").eq("student_id", student!.id)
       if (feesError) {
         console.error("[student payments] fee lookup failed:", feesError.message)
         setError("This student's fee record could not be loaded.")
@@ -70,7 +78,7 @@ export default function StudentPaymentsPage() {
       }
 
       const { data: paymentRows, error: paymentsError } = await supabase
-        .from("payments").select("id, amount, payment_date, method, status, description, installment_id, course_slug")
+        .from("payments").select("id, receipt_no, receipt_serial, verified_at, amount, payment_date, method, status, description, installment_id, course_slug")
         .eq("student_id", student!.id).order("payment_date", { ascending: false })
 
       if (paymentsError) {
@@ -149,6 +157,21 @@ export default function StudentPaymentsPage() {
                 paymentTotals.get(p.installment_id)
               )
             : null,
+          receiptNumber: p.receipt_no,
+          receiptSerial: p.receipt_serial,
+          feeAmount: Number(feesRows?.find((fee) => fee.course_slug === p.course_slug)?.total_fee ?? 0),
+          paidToDate: Number(feesRows?.find((fee) => fee.course_slug === p.course_slug)?.total_fee ?? 0) -
+            Number(feesRows?.find((fee) => fee.course_slug === p.course_slug)?.pending_amount ?? 0),
+          awaitingVerification: (paymentRows ?? [])
+            .filter((claim) => claim.course_slug === p.course_slug && isAwaitingVerification(claim.status))
+            .reduce((sum, claim) => sum + Number(claim.amount), 0),
+          balanceDue: Math.max(0,
+            Number(feesRows?.find((fee) => fee.course_slug === p.course_slug)?.pending_amount ?? 0) -
+            (paymentRows ?? [])
+              .filter((claim) => claim.course_slug === p.course_slug && isAwaitingVerification(claim.status))
+              .reduce((sum, claim) => sum + Number(claim.amount), 0)
+          ),
+          verifiedAt: p.verified_at,
         }
       }))
 
@@ -202,6 +225,7 @@ export default function StudentPaymentsPage() {
                 <TableHead className="hidden sm:table-cell">Mode</TableHead>
                 <TableHead>Amount</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead className="w-10"></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -238,11 +262,35 @@ export default function StudentPaymentsPage() {
                       {paymentStatusLabel(p.status)}
                     </Badge>
                   </TableCell>
+                  <TableCell>
+                    <PaymentReceiptButton
+                      receipt={{
+                        kind: "payment",
+                        documentNumber: p.receiptNumber || p.id,
+                        receiptSerial: p.receiptSerial,
+                        date: p.date,
+                        status: p.status,
+                        studentName: student?.name ?? "Student",
+                        studentId: student?.id ?? "—",
+                        studentPhone: student?.phone,
+                        course: p.course || "N/A",
+                        installment: p.installment || null,
+                        feeAmount: p.feeAmount,
+                        transactionAmount: p.amount,
+                        paidToDate: p.paidToDate,
+                        awaitingVerification: p.awaitingVerification,
+                        balanceDue: p.balanceDue,
+                        method: p.mode,
+                        reference: p.for,
+                        verifiedAt: p.verifiedAt,
+                      }}
+                    />
+                  </TableCell>
                 </TableRow>
               ))}
               {payments.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={5} className="h-24 text-center">
+                  <TableCell colSpan={6} className="h-24 text-center">
                     <p className="text-muted-foreground">No payment records found.</p>
                   </TableCell>
                 </TableRow>

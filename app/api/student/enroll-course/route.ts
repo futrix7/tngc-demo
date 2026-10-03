@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 import { authenticateStudentRequest, isSupabaseAdminConfigured, supabaseAdmin } from "@/lib/supabase-admin"
 import { describeRpcFailure, failureResponse } from "@/lib/api-response"
-import { checkAmountSplitAgainst, parseAmountSplit } from "@/lib/amount-split"
+import { checkAmountAgainstTotal, parsePaymentAmount } from "@/lib/amount-split"
 
 export async function POST(request: Request) {
   if (!isSupabaseAdminConfigured) {
@@ -13,14 +13,24 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: auth.error }, { status: auth.status })
   }
 
-  let body: { courseSlug?: unknown; installmentAmounts?: unknown }
+  let body: {
+    courseSlug?: unknown
+    paymentAmount?: unknown
+    paymentMethod?: unknown
+    paymentReference?: unknown
+  }
 
   try {
     const parsed: unknown = await request.json()
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return NextResponse.json({ error: "Malformed request body." }, { status: 400 })
     }
-    body = parsed as { courseSlug?: unknown; installmentAmounts?: unknown }
+    body = parsed as {
+      courseSlug?: unknown
+      paymentAmount?: unknown
+      paymentMethod?: unknown
+      paymentReference?: unknown
+    }
   } catch {
     return NextResponse.json({ error: "Malformed request body." }, { status: 400 })
   }
@@ -30,18 +40,20 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Choose a valid course." }, { status: 400 })
   }
 
-  // A student enrolling may lay the new fee out themselves — at most three
-  // amounts, their own figures — or leave it as one line for the whole fee.
-  const installmentSplit = parseAmountSplit(body.installmentAmounts)
-  if (installmentSplit.error) {
-    return NextResponse.json({ error: installmentSplit.error }, { status: 400 })
+  const payment = parsePaymentAmount(body.paymentAmount)
+  if (payment.error) {
+    return NextResponse.json({ error: payment.error }, { status: 400 })
   }
 
-  // No payment is taken here on purpose. A student enrolling online is claiming a
-  // schedule, not handing money over, and a self-recorded payment would let
-  // anyone mark a fee settled from a browser. They pay from the fee page
-  // afterwards, which files a claim the institute still has to verify.
-
+  const paymentMethod = typeof body.paymentMethod === "string" ? body.paymentMethod : "upi"
+  if (!/^(upi|cash|bank)$/.test(paymentMethod)) {
+    return NextResponse.json({ error: "Choose a valid payment method." }, { status: 400 })
+  }
+  const paymentReference =
+    typeof body.paymentReference === "string" ? body.paymentReference.trim() : ""
+  if (paymentReference.length > 200) {
+    return NextResponse.json({ error: "Payment reference must be 200 characters or fewer." }, { status: 400 })
+  }
   // The course has to be priced before the split can be checked against it —
   // create_fee_schedule refuses parts that do not add up, and finding that out
   // from a database error after the fact reads as a bug rather than a correction.
@@ -61,19 +73,19 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "That course is not available for enrollment." }, { status: 400 })
   }
 
-  const scheduleError = checkAmountSplitAgainst(
-    installmentSplit.amounts,
-    Number(course.fee_numeric ?? 0)
-  )
-  if (scheduleError) {
-    return NextResponse.json({ error: scheduleError }, { status: 400 })
+  const amountError = checkAmountAgainstTotal(payment.amount, Number(course.fee_numeric ?? 0))
+  if (amountError) {
+    return NextResponse.json({ error: amountError }, { status: 400 })
   }
 
   try {
     const { data, error } = await supabaseAdmin.rpc("enroll_student_in_course", {
       p_user_id: auth.userId,
       p_course_slug: courseSlug,
-      p_installment_amounts: installmentSplit.amounts,
+      p_installment_amounts: null,
+      p_payment_method: paymentMethod,
+      p_payment_reference: paymentReference,
+      p_student_claim_amount: payment.amount,
     })
 
     if (error) {
@@ -87,7 +99,8 @@ export async function POST(request: Request) {
       success: true,
       courseSlug: row?.course_slug ?? courseSlug,
       totalFee: Number(row?.total_fee ?? 0),
-      installments: installmentSplit.amounts?.length ?? 1,
+      feeId: row?.fee_id ?? null,
+      paymentClaimedAmount: payment.amount,
     })
   } catch (error) {
     console.error("[student/enroll-course] crashed:", error)

@@ -69,7 +69,7 @@ export function useAuthState(): AuthState {
       return { ok: true }
     }
 
-    const { error } = await supabase.auth.signOut()
+    const { error } = await supabase.auth.signOut({ scope: "local" })
 
     if (error) {
       console.error("[auth] signOut failed:", error.message)

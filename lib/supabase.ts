@@ -36,5 +36,6 @@ if (!isSupabaseConfigured) {
  */
 export const supabase = createBrowserClient(
   supabaseUrl || "http://127.0.0.1:54321",
-  supabaseAnonKey || "supabase-anon-key-not-configured"
+  supabaseAnonKey || "supabase-anon-key-not-configured",
+  { auth: { persistSession: true } }
 )

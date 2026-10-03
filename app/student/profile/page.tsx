@@ -2,10 +2,19 @@
 
 import { useState, useEffect } from "react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Loader2 } from "lucide-react"
@@ -18,7 +27,7 @@ import {
   BookOpen,
   Edit,
   Camera,
-  Settings,
+  LogOut,
   ChevronRight,
   CreditCard,
   Award,
@@ -26,6 +35,8 @@ import {
 import { supabase } from "@/lib/supabase"
 import { EmptyState, QueryError } from "@/components/student/data-state"
 import { useToast } from "@/components/ui/sonner"
+import { useAuthState } from "@/hooks/use-auth"
+import { ROLE_LOGIN } from "@/lib/auth/roles"
 
 interface Profile {
   name: string
@@ -68,7 +79,9 @@ function formatDate(dateStr: string | null) {
 }
 
 export default function StudentProfile() {
+  const router = useRouter()
   const { toast } = useToast()
+  const { signOut } = useAuthState()
   const [profile, setProfile] = useState<Profile>(fallbackProfile)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -78,6 +91,21 @@ export default function StudentProfile() {
   const [editAddress, setEditAddress] = useState("")
   const [loadError, setLoadError] = useState<string | null>(null)
   const [attempt, setAttempt] = useState(0)
+  const [signingOut, setSigningOut] = useState(false)
+  const [signOutDialogOpen, setSignOutDialogOpen] = useState(false)
+
+  const handleSignOut = async () => {
+    if (signingOut) return
+    setSigningOut(true)
+    const result = await signOut()
+    if (!result.ok) {
+      toast("We couldn't sign you out. Please try again.", { variant: "destructive" })
+      setSigningOut(false)
+      return
+    }
+    setSignOutDialogOpen(false)
+    router.replace(ROLE_LOGIN.student)
+  }
 
   useEffect(() => {
     async function fetchProfile() {
@@ -399,21 +427,51 @@ export default function StudentProfile() {
         </Link>
       </div>
 
-      {/* Settings Link */}
-      <Link href="/student/profile/settings">
-        <button className="flex w-full items-center justify-between rounded-xl border border-border p-4 hover:bg-muted/50 transition-colors">
-          <div className="flex items-center gap-3">
-            <div className="size-9 rounded-lg bg-muted flex items-center justify-center">
-              <Settings className="size-4 text-muted-foreground" />
-            </div>
-            <div className="text-left">
-              <p className="text-sm font-medium">Settings</p>
-              <p className="text-[11px] text-muted-foreground">Theme, notifications, account</p>
-            </div>
-          </div>
-          <ChevronRight className="size-4 text-muted-foreground" />
-        </button>
-      </Link>
+      <Button
+        type="button"
+        variant="outline"
+        className="h-11 w-full gap-2 text-destructive hover:text-destructive"
+        onClick={() => setSignOutDialogOpen(true)}
+        disabled={signingOut}
+      >
+        <LogOut className="size-4" />
+        Sign out
+      </Button>
+
+      <Dialog
+        open={signOutDialogOpen}
+        onOpenChange={(open) => {
+          if (!signingOut) setSignOutDialogOpen(open)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Sign out?</DialogTitle>
+            <DialogDescription>
+              You will be signed out of this device. You can sign back in anytime.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setSignOutDialogOpen(false)}
+              disabled={signingOut}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={handleSignOut}
+              disabled={signingOut}
+            >
+              {signingOut && <Loader2 className="size-4 animate-spin" />}
+              {signingOut ? "Signing out..." : "Sign out"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

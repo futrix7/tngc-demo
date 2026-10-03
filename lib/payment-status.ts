@@ -50,3 +50,33 @@ export function paymentStatusLabel(status: string | null | undefined): string {
   if (isRejected(status)) return "Rejected — not received, please pay again"
   return status || "—"
 }
+
+/**
+ * Colour family for a status, wherever it is printed or shown as a badge.
+ *
+ * Lives beside the wording so a ledger and a printed statement cannot drift
+ * apart: `Paid` reads as received, `Pending` as money in flight, `Rejected` as
+ * settled-but-refused rather than alarming. The values are the tones understood
+ * by the print template (`lib/print-report.ts`).
+ */
+export type PaymentStatusTone = "positive" | "warning" | "negative" | "muted" | "info"
+
+export function paymentStatusTone(status: string | null | undefined): PaymentStatusTone {
+  if (status === "Paid") return "positive"
+  if (isAwaitingVerification(status)) return "warning"
+  if (status === "Partial") return "info"
+  if (status === "Overdue") return "negative"
+  return "muted"
+}
+
+/**
+ * Compact wording for a status inside a table column.
+ *
+ * The student-facing sentence is right for a banner and too long for a cell on
+ * a printed page, where the same status repeats on every row.
+ */
+export function paymentStatusCellLabel(status: string | null | undefined): string {
+  if (isAwaitingVerification(status)) return "Awaiting verification"
+  if (isRejected(status)) return "Rejected"
+  return status || "—"
+}

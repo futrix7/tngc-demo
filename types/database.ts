@@ -405,6 +405,7 @@ export interface Database {
       fees: {
         Row: {
           id: string
+          receipt_serial: number
           student_id: string
           course_slug: string | null
           total_fee: number
@@ -437,6 +438,7 @@ export interface Database {
       fee_installments: {
         Row: {
           id: string
+          statement_serial: number
           fee_id: string
           label: string
           amount: number
@@ -447,6 +449,7 @@ export interface Database {
         }
         Insert: {
           id?: string
+          statement_serial?: number
           fee_id: string
           label: string
           amount: number
@@ -457,6 +460,7 @@ export interface Database {
         }
         Update: {
           id?: string
+          statement_serial?: number
           fee_id?: string
           label?: string
           amount?: number
@@ -510,6 +514,7 @@ export interface Database {
         }
         Insert: {
           id: string
+          receipt_serial?: number
           student_id: string
           student_name: string
           course_slug?: string | null
@@ -525,6 +530,7 @@ export interface Database {
         }
         Update: {
           id?: string
+          receipt_serial?: number
           student_id?: string
           student_name?: string
           course_slug?: string | null
@@ -727,6 +733,7 @@ export interface Database {
           amount: number
           type: "income" | "expense"
           branch_id: string | null
+          teacher_id: string | null
           created_at: string
         }
         Insert: {
@@ -737,6 +744,7 @@ export interface Database {
           amount: number
           type: "income" | "expense"
           branch_id?: string | null
+          teacher_id?: string | null
           created_at?: string
         }
         Update: {
@@ -747,6 +755,7 @@ export interface Database {
           amount?: number
           type?: "income" | "expense"
           branch_id?: string | null
+          teacher_id?: string | null
           created_at?: string
         }
       }
@@ -898,6 +907,7 @@ export interface Database {
           p_payment_method?: string
           p_payment_reference?: string
           p_verified_by?: string
+          p_student_claim_amount?: number | null
         }
         Returns: {
           fee_id: string

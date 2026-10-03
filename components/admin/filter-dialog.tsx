@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { DateFilterInput } from "@/components/admin/date-filter-input"
 
 export interface FilterOption {
   label: string
@@ -126,6 +127,14 @@ export function FilterDialog({ title, description, fields, values, onApply, onCl
                   >
                     {(field.options ?? []).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                   </select>
+                ) : field.type === "date" ? (
+                  <DateFilterInput
+                    id={`filter-${field.key}`}
+                    value={draft[field.key] ?? field.defaultValue}
+                    onChange={(value) =>
+                      setDraft((current) => ({ ...current, [field.key]: value }))
+                    }
+                  />
                 ) : (
                   <Input
                     id={`filter-${field.key}`}

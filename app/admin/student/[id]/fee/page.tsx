@@ -8,9 +8,11 @@ import { CheckCircle2, Clock, Loader2, AlertTriangle } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { supabase } from "@/lib/supabase"
 import { useStudent } from "../layout"
+import { PaymentReceiptButton } from "@/components/shared/payment-receipt-button"
 
 interface Installment {
   id: string
+  statementSerial: number
   label: string
   course: string
   amount: number
@@ -64,7 +66,7 @@ export default function StudentFeePage() {
       const courseSlugs = [...new Set(currentFees.map((fee) => fee.course_slug).filter(Boolean))] as string[]
       const [instResult, coursesResult] = await Promise.all([
         supabase
-          .from("fee_installments").select("id, label, amount, due_date, paid_date, status, fee_id")
+          .from("fee_installments").select("id, statement_serial, label, amount, due_date, paid_date, status, fee_id")
           .in("fee_id", feeIds).order("due_date", { ascending: true }),
         courseSlugs.length
           ? supabase.from("courses").select("slug, name, short_name").in("slug", courseSlugs)
@@ -128,6 +130,7 @@ export default function StudentFeePage() {
         const slug = slugByFee.get(row.fee_id) ?? ""
         return {
           id: row.id,
+          statementSerial: row.statement_serial,
           label: row.label,
           course: nameBySlug.get(slug) ?? slug ?? "Course",
           amount,
@@ -237,6 +240,25 @@ export default function StudentFeePage() {
                         </div>
                       </div>
                       <div className="flex shrink-0 items-center justify-between gap-3 sm:ml-3 sm:justify-end">
+                        <PaymentReceiptButton
+                          receipt={{
+                            kind: "installment",
+                            documentNumber: inst.id,
+                            statementSerial: inst.statementSerial,
+                            date: inst.dueDate,
+                            status: inst.status,
+                            studentName: student?.name ?? "Student",
+                            studentId: student?.id ?? "—",
+                            studentPhone: student?.phone,
+                            course: inst.course,
+                            installment: inst.label,
+                            dueDate: inst.dueDate,
+                            feeAmount: inst.amount,
+                            paidToDate: inst.paidAmount,
+                            awaitingVerification: inst.pendingClaimAmount,
+                            balanceDue: inst.remainingBalance,
+                          }}
+                        />
                         {/* The figure owed, not the figure scheduled. On a partly
                             paid line these differ, and showing the scheduled one
                             was how a part payment came to look unpaid. */}

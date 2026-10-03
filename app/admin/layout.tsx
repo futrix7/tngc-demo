@@ -83,7 +83,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       >
         <div className="flex h-14 items-center justify-between border-b border-border px-4">
           <Link href="/admin/dashboard" className="flex items-center gap-2">
-            <div className="flex size-7 items-center justify-center rounded-lg bg-primary px-1 py-0.5 text-primary-foreground text-[10px] font-extrabold">
+            <div className="flex h-7 w-9 shrink-0 items-center justify-center rounded-lg bg-primary px-1 py-0.5 text-primary-foreground text-[10px] font-extrabold">
               TNGC
             </div>
             <span className="text-sm font-bold text-foreground">Admin Panel</span>

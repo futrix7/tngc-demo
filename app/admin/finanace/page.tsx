@@ -11,7 +11,6 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import { Progress } from "@/components/ui/progress";
 import {
   Table,
   TableHeader,
@@ -27,6 +26,9 @@ import {
   InputOTPSeparator,
 } from "@/components/ui/input-otp";
 import {
+  CalendarDays,
+  ChevronLeft,
+  ChevronRight,
   IndianRupee,
   TrendingUp,
   TrendingDown,
@@ -36,9 +38,9 @@ import {
   Wallet,
   PiggyBank,
   CreditCard,
-  BarChart3,
   Lock,
   AlertTriangle,
+  X,
 } from "lucide-react";
 import {
   Dialog,
@@ -53,10 +55,11 @@ import { ExportDialog } from "@/components/admin/export-dialog";
 import { supabase } from "@/lib/supabase";
 import { useToast } from "@/components/ui/sonner";
 import {
-  AreaChart,
   Area,
   BarChart,
   Bar,
+  ComposedChart,
+  Line,
   PieChart,
   Pie,
   Cell,
@@ -69,7 +72,9 @@ import {
 } from "recharts";
 import { tooltipStyle, axisStyle, gridStyle, CHART_PALETTE } from "@/lib/chart-theme";
 import { AddExpenseSheet } from "@/components/admin/add-expense-sheet";
+import { Filter, RotateCcw } from "lucide-react";
 import { FilterDialog, type FilterField, type FilterValues } from "@/components/admin/filter-dialog";
+import { DateFilterInput } from "@/components/admin/date-filter-input";
 
 interface SummaryCard {
   title: string;
@@ -81,36 +86,200 @@ interface SummaryCard {
   bgColor: string;
 }
 
-interface MonthlyDatum {
-  month: string;
-  revenue: number;
-  expenses: number;
-}
-
 interface ExpenseItem {
   name: string;
   value: number;
   percentage: number;
 }
 
-interface CourseRevenueItem {
+interface FinanceRecord {
+  date: string;
+  amount: number;
+  type: "income" | "expense";
+  category: string;
+}
+
+interface PaymentMethodItem {
   name: string;
-  amount: string;
+  value: number;
   percentage: number;
 }
 
-interface BranchDatum {
-  branch: string;
-  revenue: number;
+interface ExpenseTrendDatum {
+  period: string;
+  [category: string]: string | number;
 }
 
 interface RecentTransaction {
   id: string;
   date: string;
+  dateValue: string;
   description: string;
   category: string;
   amount: string;
   type: "income" | "expense";
+  teacherSalary: boolean;
+}
+
+type FinancePeriod = "month" | "quarter" | "year";
+type CustomChartFilter =
+  | { type: "month"; value: string }
+  | { type: "dates"; from: string; to: string }
+  | { type: "year"; value: string };
+
+const FINANCE_PERIODS: { value: FinancePeriod; label: string; description: string }[] = [
+  { value: "month", label: "Month", description: "Daily totals · current month" },
+  { value: "quarter", label: "Quarter", description: "Monthly totals · latest 3 months" },
+  { value: "year", label: "Year", description: "Monthly totals · current year" },
+];
+
+function parseLocalDate(value: string): Date {
+  const [year, month, day] = value.slice(0, 10).split("-").map(Number);
+  return new Date(year, month - 1, day);
+}
+
+function toLocalDateKey(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function monthKey(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function formatDateForUser(value: string): string {
+  const [year, month, day] = value.split("-");
+  return `${day}/${month}/${year}`;
+}
+
+function getFinanceBuckets(
+  period: FinancePeriod,
+  customFilter: CustomChartFilter | null,
+  today = new Date()
+) {
+  const buckets: { key: string; label: string }[] = [];
+  const granularity = customFilter?.type === "year" || period !== "month" ? "month" : "day";
+  const start = customFilter
+    ? customFilter.type === "month"
+      ? new Date(Number(customFilter.value.slice(0, 4)), Number(customFilter.value.slice(5, 7)) - 1, 1)
+      : customFilter.type === "year"
+        ? new Date(Number(customFilter.value), 0, 1)
+        : parseLocalDate(customFilter.from)
+    : period === "month"
+      ? new Date(today.getFullYear(), today.getMonth(), 1)
+      : period === "quarter"
+        ? new Date(today.getFullYear(), today.getMonth() - 2, 1)
+        : new Date(today.getFullYear(), 0, 1);
+  const end = customFilter
+    ? customFilter.type === "month"
+      ? new Date(start.getFullYear(), start.getMonth() + 1, 0)
+      : customFilter.type === "year"
+        ? new Date(start.getFullYear(), 11, 31)
+        : parseLocalDate(customFilter.to)
+    : period === "month"
+      ? new Date(today.getFullYear(), today.getMonth() + 1, 0)
+      : period === "quarter"
+        ? new Date(today.getFullYear(), today.getMonth() + 1, 0)
+        : new Date(today.getFullYear(), 11, 31);
+
+  if (granularity === "day") {
+    for (const cursor = new Date(start); cursor <= end; cursor.setDate(cursor.getDate() + 1)) {
+      buckets.push({
+        key: toLocalDateKey(cursor),
+        label: cursor.toLocaleDateString("en-IN", { day: "numeric", month: "short" }),
+      });
+    }
+  } else {
+    for (const cursor = new Date(start.getFullYear(), start.getMonth(), 1);
+      cursor <= end;
+      cursor.setMonth(cursor.getMonth() + 1)
+    ) {
+      buckets.push({
+        key: monthKey(cursor),
+        label: cursor.toLocaleDateString("en-IN", { month: "short", year: "2-digit" }),
+      });
+    }
+  }
+  return buckets;
+}
+
+function getFinancePeriodKey(dateValue: string, granularity: "day" | "month"): string {
+  const date = parseLocalDate(dateValue);
+  return granularity === "day" ? toLocalDateKey(date) : monthKey(date);
+}
+
+function buildFinanceCharts(
+  records: FinanceRecord[],
+  period: FinancePeriod,
+  customFilter: CustomChartFilter | null
+) {
+  const buckets = getFinanceBuckets(period, customFilter);
+  const granularity = customFilter?.type === "year" || period !== "month" ? "month" : "day";
+  const bucketKeys = new Set(buckets.map((bucket) => bucket.key));
+  const chartRecords = records.filter((record) =>
+    bucketKeys.has(getFinancePeriodKey(record.date, granularity))
+  );
+  const trendByKey = new Map(
+    buckets.map((bucket) => [bucket.key, { period: bucket.label, revenue: 0, expenses: 0, net: 0 }])
+  );
+  const expenseTotals = new Map<string, number>();
+
+  for (const record of chartRecords) {
+    const key = getFinancePeriodKey(record.date, granularity);
+    const trend = trendByKey.get(key);
+    if (trend) {
+      if (record.type === "income") trend.revenue += record.amount;
+      else trend.expenses += record.amount;
+    }
+
+    if (record.type === "expense") {
+      const category = record.category || "Other";
+      expenseTotals.set(category, (expenseTotals.get(category) || 0) + record.amount);
+    }
+  }
+
+  const topExpenseCategories = Array.from(expenseTotals.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 4)
+    .map(([category]) => category);
+  const expenseCategories = [
+    ...topExpenseCategories,
+    ...(expenseTotals.size > topExpenseCategories.length ? ["Other expenses"] : []),
+  ];
+  const expenseTrendByKey = new Map<string, ExpenseTrendDatum>(
+    buckets.map((bucket) => [
+      bucket.key,
+      Object.fromEntries([
+        ["period", bucket.label],
+        ...expenseCategories.map((category) => [category, 0]),
+      ]),
+    ])
+  );
+
+  for (const record of chartRecords) {
+    if (record.type !== "expense") continue;
+    const key = getFinancePeriodKey(record.date, granularity);
+    if (!bucketKeys.has(key)) continue;
+
+    const category = topExpenseCategories.includes(record.category)
+      ? record.category
+      : "Other expenses";
+    const bucket = expenseTrendByKey.get(key);
+    if (bucket) bucket[category] = Number(bucket[category] || 0) + record.amount;
+  }
+
+  const trend = Array.from(trendByKey.values()).map((item) => ({
+    ...item,
+    net: item.revenue - item.expenses,
+  }));
+
+  return {
+    trend,
+    expenseTrend: Array.from(expenseTrendByKey.values()),
+    expenseCategories,
+  };
 }
 
 /**
@@ -146,10 +315,9 @@ export default function AdminFinancePage() {
   const [dataError, setDataError] = useState<string | null>(null);
 
   const [summaryCards, setSummaryCards] = useState<SummaryCard[]>([]);
-  const [monthlyData, setMonthlyData] = useState<MonthlyDatum[]>([]);
+  const [financeRecords, setFinanceRecords] = useState<FinanceRecord[]>([]);
   const [expenseBreakdown, setExpenseBreakdown] = useState<ExpenseItem[]>([]);
-  const [courseRevenue, setCourseRevenue] = useState<CourseRevenueItem[]>([]);
-  const [branchData, setBranchData] = useState<BranchDatum[]>([]);
+  const [paymentMethodData, setPaymentMethodData] = useState<PaymentMethodItem[]>([]);
   const [allTransactions, setAllTransactions] = useState<RecentTransaction[]>([]);
   /**
    * How many of the most recent transactions the table shows.
@@ -163,9 +331,22 @@ export default function AdminFinancePage() {
   const [transactionLimit, setTransactionLimit] = useState<number | null>(10);
   const [refreshKey, setRefreshKey] = useState(0);
   const [dateFilters, setDateFilters] = useState({ from: "", to: "" });
+  const [financePeriod, setFinancePeriod] = useState<FinancePeriod>("month");
+  const [chartFilterOpen, setChartFilterOpen] = useState(false);
+  const [chartFilterType, setChartFilterType] = useState<CustomChartFilter["type"]>("month");
+  const [chartMonth, setChartMonth] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  });
+  const [chartFrom, setChartFrom] = useState("");
+  const [chartTo, setChartTo] = useState("");
+  const [chartYear, setChartYear] = useState(String(new Date().getFullYear()));
+  const [yearRangeStart, setYearRangeStart] = useState(
+    Math.floor(new Date().getFullYear() / 12) * 12
+  );
+  const [customChartFilter, setCustomChartFilter] = useState<CustomChartFilter | null>(null);
   const pendingFilterFetch = useRef<((success: boolean) => void) | null>(null);
   const filterFetchSucceeded = useRef(true);
-  const [isInProfit, setIsInProfit] = useState(true);
 
   async function confirmDeleteExpense() {
     if (!expenseToDelete || deletingExpense) return;
@@ -259,12 +440,13 @@ export default function AdminFinancePage() {
       filterFetchSucceeded.current = true;
 
       async function fetchTransactions() {
-        const rows: { id: string; date: string; description: string; category: string; amount: number; type: "income" | "expense"; branch_id: string | null; created_at: string }[] = []
+        const rows: { id: string; date: string; description: string; category: string; amount: number; type: "income" | "expense"; branch_id: string | null; teacher_id: string | null }[] = []
         let offset = 0
         while (true) {
-          let query = supabase.from("transactions").select("*").order("date", { ascending: false })
-          if (dateFilters.from) query = query.gte("date", dateFilters.from)
-          if (dateFilters.to) query = query.lte("date", dateFilters.to)
+          const query = supabase
+            .from("transactions")
+            .select("id, date, description, category, amount, type, branch_id, teacher_id")
+            .order("date", { ascending: false })
           const result = await query.range(offset, offset + 999)
           if (result.error) return { data: null, error: result.error }
           rows.push(...(result.data ?? []))
@@ -275,12 +457,10 @@ export default function AdminFinancePage() {
       }
 
       async function fetchPayments() {
-        const rows: { id: string; student_name: string; course_slug: string | null; amount: number; payment_date: string; method: string; status: string; branch_id: string | null }[] = []
+        const rows: { id: string; student_name: string; course_slug: string | null; amount: number; payment_date: string; method: string; status: string }[] = []
         let offset = 0
         while (true) {
-          let query = supabase.from("payments").select("id, student_name, course_slug, amount, payment_date, method, status, branch_id").order("payment_date", { ascending: false })
-          if (dateFilters.from) query = query.gte("payment_date", dateFilters.from)
-          if (dateFilters.to) query = query.lte("payment_date", dateFilters.to)
+          const query = supabase.from("payments").select("id, student_name, course_slug, amount, payment_date, method, status").order("payment_date", { ascending: false })
           const result = await query.range(offset, offset + 999)
           if (result.error) return { data: null, error: result.error }
           rows.push(...(result.data ?? []))
@@ -290,25 +470,17 @@ export default function AdminFinancePage() {
         return { data: rows, error: null }
       }
 
-      const [transactionsResult, paymentsResult, coursesResult, branchesResult] = await Promise.all([
+      const [transactionsResult, paymentsResult, coursesResult] = await Promise.all([
         fetchTransactions(),
         fetchPayments(),
         supabase.from("courses").select("slug, name, short_name"),
-        supabase.from("branches").select("id, name"),
       ]);
 
-      // Checked explicitly rather than folded into `|| []`. This page selects
-      // `branch_id` from `payments`, a column that did not exist for a while, and
-      // PostgREST rejects the whole query when one selected column is unknown.
-      // Because every result was defaulted to an empty array, that failure made
-      // the payment list and the branch chart render as "no data" — a page that
-      // looked correct and was quietly wrong. An unrun migration is a real
-      // operator problem and should say so.
+      // Keep query errors visible rather than rendering success-shaped empty charts.
       const failures = [
         transactionsResult.error,
         paymentsResult.error,
         coursesResult.error,
-        branchesResult.error,
       ].filter((e): e is NonNullable<typeof e> => e !== null);
 
       if (failures.length > 0) {
@@ -332,20 +504,33 @@ export default function AdminFinancePage() {
         coursesResult.data.forEach((c) => courseMap.set(c.slug, c.short_name || c.name));
       }
 
-      const branchMap = new Map<string, string>();
-      if (branchesResult.data) {
-        branchesResult.data.forEach((b) => branchMap.set(b.id, b.name));
-      }
-
-      const verifiedPayments = (payments || []).filter((p) => p.status === "Paid");
-      const expenseTransactions = (transactions || []).filter((t) => t.type === "expense");
+      const matchesDateFilter = (date: string) =>
+        (!dateFilters.from || date >= dateFilters.from)
+        && (!dateFilters.to || date <= dateFilters.to);
+      const allVerifiedPayments = payments.filter((payment) => payment.status === "Paid");
+      const allExpenseTransactions = transactions.filter((transaction) => transaction.type === "expense");
+      setFinanceRecords([
+        ...allVerifiedPayments.map((payment) => ({
+          date: payment.payment_date,
+          amount: Number(payment.amount),
+          type: "income" as const,
+          category: payment.method || "Other",
+        })),
+        ...allExpenseTransactions.map((transaction) => ({
+          date: transaction.date,
+          amount: Number(transaction.amount),
+          type: "expense" as const,
+          category: transaction.category || "Other",
+        })),
+      ]);
+      const verifiedPayments = allVerifiedPayments.filter((payment) => matchesDateFilter(payment.payment_date));
+      const expenseTransactions = allExpenseTransactions.filter((transaction) => matchesDateFilter(transaction.date));
 
       const totalIncome = verifiedPayments.reduce((sum, p) => sum + Number(p.amount), 0);
       const totalExpenses = expenseTransactions.reduce((sum, t) => sum + Number(t.amount), 0);
       const netProfit = totalIncome - totalExpenses;
       const profitMargin = totalIncome > 0 ? Math.round((netProfit / totalIncome) * 100) : 0;
       const profitStatus = netProfit >= 0;
-      setIsInProfit(profitStatus);
 
       setSummaryCards([
         {
@@ -386,34 +571,6 @@ export default function AdminFinancePage() {
         },
       ]);
 
-      const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-      const now = new Date();
-      const monthlyMap = new Map<string, { revenue: number; expenses: number }>();
-
-      for (let i = 5; i >= 0; i--) {
-        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-        const key = monthNames[d.getMonth()];
-        monthlyMap.set(key, { revenue: 0, expenses: 0 });
-      }
-
-      for (const payment of verifiedPayments) {
-        const d = new Date(payment.payment_date);
-        const key = monthNames[d.getMonth()];
-        if (monthlyMap.has(key)) {
-          monthlyMap.get(key)!.revenue += Number(payment.amount);
-        }
-      }
-
-      for (const transaction of expenseTransactions) {
-        const d = new Date(transaction.date);
-        const key = monthNames[d.getMonth()];
-        if (monthlyMap.has(key)) {
-          monthlyMap.get(key)!.expenses += Number(transaction.amount);
-        }
-      }
-
-      setMonthlyData(Array.from(monthlyMap.entries()).map(([month, vals]) => ({ month, ...vals })));
-
       const expenseMap = new Map<string, number>();
       for (const transaction of expenseTransactions) {
         const category = transaction.category || "Other";
@@ -430,38 +587,25 @@ export default function AdminFinancePage() {
         }));
       setExpenseBreakdown(expenseItems);
 
-      const courseRevMap = new Map<string, number>();
+      const paymentMethodMap = new Map<string, number>();
       for (const payment of verifiedPayments) {
-        const slug = payment.course_slug || "Unknown";
-        courseRevMap.set(slug, (courseRevMap.get(slug) || 0) + Number(payment.amount));
+        const method = payment.method || "Other";
+        paymentMethodMap.set(method, (paymentMethodMap.get(method) || 0) + Number(payment.amount));
       }
-
-      const totalCourseRev = Array.from(courseRevMap.values()).reduce((sum, value) => sum + value, 0);
-      const courseRevItems: CourseRevenueItem[] = Array.from(courseRevMap.entries())
-        .sort((a, b) => b[1] - a[1])
-        .map(([slug, amount]) => ({
-          name: courseMap.get(slug) || slug,
-          amount: formatCurrencyINR(amount),
-          percentage: totalCourseRev > 0 ? Math.round((amount / totalCourseRev) * 100) : 0,
-        }));
-      setCourseRevenue(courseRevItems);
-
-      const branchRevMap = new Map<string, number>();
-      for (const payment of verifiedPayments) {
-        const branchId = payment.branch_id || "unknown";
-        branchRevMap.set(branchId, (branchRevMap.get(branchId) || 0) + Number(payment.amount));
-      }
-
-      const branchItems: BranchDatum[] = Array.from(branchRevMap.entries())
-        .sort((a, b) => b[1] - a[1])
-        .map(([branchId, revenue]) => ({
-          branch: branchMap.get(branchId) || "Unknown",
-          revenue,
-        }));
-      setBranchData(branchItems);
+      const totalPaymentMethods = Array.from(paymentMethodMap.values()).reduce((sum, amount) => sum + amount, 0);
+      setPaymentMethodData(
+        Array.from(paymentMethodMap.entries())
+          .sort((a, b) => b[1] - a[1])
+          .map(([name, value]) => ({
+            name,
+            value,
+            percentage: totalPaymentMethods > 0 ? Math.round((value / totalPaymentMethods) * 100) : 0,
+          }))
+      );
 
       const mergedIncomeRows: RecentTransaction[] = verifiedPayments.map((payment) => ({
         id: payment.id,
+        dateValue: payment.payment_date,
         date: new Date(payment.payment_date).toLocaleDateString("en-IN", {
           day: "2-digit",
           month: "short",
@@ -471,10 +615,12 @@ export default function AdminFinancePage() {
         category: (payment.course_slug && courseMap.get(payment.course_slug)) || "Course Fee",
         amount: formatCurrencyINR(Number(payment.amount)),
         type: "income",
+        teacherSalary: false,
       }));
 
       const mergedExpenseRows: RecentTransaction[] = expenseTransactions.map((transaction) => ({
         id: transaction.id,
+        dateValue: transaction.date,
         date: new Date(transaction.date).toLocaleDateString("en-IN", {
           day: "2-digit",
           month: "short",
@@ -484,10 +630,13 @@ export default function AdminFinancePage() {
         category: transaction.category || "Other",
         amount: formatCurrencyINR(Number(transaction.amount)),
         type: "expense",
+        teacherSalary:
+          (transaction.teacher_id ?? null) !== null
+          || transaction.description.startsWith("Teacher salary - "),
       }));
 
       const allTxns: RecentTransaction[] = [...mergedIncomeRows, ...mergedExpenseRows]
-        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+        .sort((a, b) => b.dateValue.localeCompare(a.dateValue));
 
       // Sorted newest first, so whichever limit is chosen always shows the most
       // recent entries rather than an arbitrary slice.
@@ -513,8 +662,19 @@ export default function AdminFinancePage() {
     };
   }, [authenticated, dateFilters, refreshKey]);
 
-  const revenueAccent = isInProfit ? "#22c55e" : "#ef4444";
+  const { trend: trendData, expenseTrend, expenseCategories } = useMemo(
+    () => buildFinanceCharts(financeRecords, financePeriod, customChartFilter),
+    [financeRecords, financePeriod, customChartFilter]
+  );
+  const revenueAccent = "#22c55e";
   const expenseAccent = "#ef4444";
+  const selectedPeriodDescription = customChartFilter?.type === "month"
+    ? `Daily totals · ${parseLocalDate(`${customChartFilter.value}-01`).toLocaleDateString("en-IN", { month: "long", year: "numeric" })}`
+    : customChartFilter?.type === "dates"
+      ? `${formatDateForUser(customChartFilter.from)} to ${formatDateForUser(customChartFilter.to)}`
+      : customChartFilter?.type === "year"
+        ? `Monthly totals · ${customChartFilter.value}`
+        : FINANCE_PERIODS.find((period) => period.value === financePeriod)?.description ?? "";
   const financeFilterFields: FilterField[] = [
     { key: "from", label: "From date", type: "date", defaultValue: "" },
     { key: "to", label: "To date", type: "date", defaultValue: "" },
@@ -530,6 +690,39 @@ export default function AdminFinancePage() {
       pendingFilterFetch.current = resolve;
     });
     if (!succeeded) throw new Error("Finance filter request failed")
+  }
+
+  function applyChartFilter() {
+    if (chartFilterType === "month") {
+      if (!/^\d{4}-\d{2}$/.test(chartMonth)) {
+        toast("Select a valid month.", { variant: "destructive" });
+        return;
+      }
+      setCustomChartFilter({ type: "month", value: chartMonth });
+      setFinancePeriod("month");
+    } else if (chartFilterType === "dates") {
+      if (!chartFrom || !chartTo || chartFrom > chartTo) {
+        toast("Select a valid date range.", { variant: "destructive" });
+        return;
+      }
+      setCustomChartFilter({ type: "dates", from: chartFrom, to: chartTo });
+      setFinancePeriod("month");
+    } else {
+      const year = Number(chartYear);
+      if (!Number.isInteger(year) || year < 1900 || year > 9999) {
+        toast("Enter a valid year.", { variant: "destructive" });
+        return;
+      }
+      setCustomChartFilter({ type: "year", value: String(year) });
+      setFinancePeriod("year");
+    }
+    setChartFilterOpen(false);
+  }
+
+  function resetChartFilter() {
+    setCustomChartFilter(null);
+    setFinancePeriod("month");
+    setChartFilterOpen(false);
   }
 
   return (
@@ -657,25 +850,58 @@ export default function AdminFinancePage() {
                 ))}
               </div>
 
-              {/* Monthly Revenue vs Expenses Chart */}
+              {/* Cash flow trend */}
               <Card>
                 <CardHeader>
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
-                      <CardTitle>Monthly Revenue vs Expenses</CardTitle>
-                      <CardDescription>Comparative trend for the last 6 months</CardDescription>
+                      <CardTitle>Cash Flow Trend</CardTitle>
+                      <CardDescription>{selectedPeriodDescription} · revenue, expenses, and net cash flow</CardDescription>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <BarChart3 className="h-4 w-4 text-muted-foreground" />
-                      <span className="text-sm text-muted-foreground">
-                        Total Revenue: {formatCurrencyINR(monthlyData.reduce((sum, item) => sum + Number(item.revenue || 0), 0))}
-                      </span>
+                    <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Cash flow time period">
+                      {FINANCE_PERIODS.map((period) => (
+                        <Button
+                          key={period.value}
+                          type="button"
+                          size="sm"
+                          variant={financePeriod === period.value ? "default" : "outline"}
+                          aria-pressed={financePeriod === period.value}
+                          onClick={() => {
+                            setCustomChartFilter(null);
+                            setFinancePeriod(period.value);
+                          }}
+                        >
+                          {period.label}
+                        </Button>
+                      ))}
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={customChartFilter ? "default" : "outline"}
+                        className="gap-2"
+                        onClick={() => setChartFilterOpen(true)}
+                      >
+                        <Filter className="size-4" />
+                        Filter
+                      </Button>
+                      {customChartFilter && (
+                        <Button
+                          type="button"
+                          size="icon-sm"
+                          variant="ghost"
+                          aria-label="Clear chart filter"
+                          title="Clear chart filter"
+                          onClick={resetChartFilter}
+                        >
+                          <X className="size-4" />
+                        </Button>
+                      )}
                     </div>
                   </div>
                 </CardHeader>
                 <CardContent>
                   <ResponsiveContainer width="100%" height={350}>
-                    <AreaChart data={monthlyData}>
+                    <ComposedChart data={trendData}>
                       <defs>
                         <linearGradient id="colorRevenue" x1="0" y1="0" x2="0" y2="1">
                           <stop offset="5%" stopColor={revenueAccent} stopOpacity={0.3} />
@@ -687,17 +913,17 @@ export default function AdminFinancePage() {
                         </linearGradient>
                       </defs>
                       <CartesianGrid {...gridStyle} />
-                      <XAxis
-                        dataKey="month"
-                        tick={axisStyle}
-                      />
+                      <XAxis dataKey="period" tick={axisStyle} />
                       <YAxis
                         tick={axisStyle}
                         tickFormatter={(value) => `₹${(value / 1000).toFixed(0)}K`}
                       />
                       <Tooltip
                         contentStyle={tooltipStyle}
-                        formatter={(value) => [`₹${(Number(value) / 1000).toFixed(0)}K`, ""]}
+                        formatter={(value, name) => [
+                          formatCurrencyINR(Number(value)),
+                          String(name),
+                        ]}
                       />
                       <Legend />
                       <Area
@@ -718,14 +944,137 @@ export default function AdminFinancePage() {
                         fill="url(#colorExpenses)"
                         name="Expenses"
                       />
-                    </AreaChart>
+                      <Line
+                        type="monotone"
+                        dataKey="net"
+                        stroke="#6366f1"
+                        strokeWidth={2}
+                        dot={false}
+                        name="Net cash flow"
+                      />
+                    </ComposedChart>
                   </ResponsiveContainer>
                 </CardContent>
               </Card>
 
-              {/* Expense Breakdown & Branch-wise Revenue */}
+              <Dialog open={chartFilterOpen} onOpenChange={setChartFilterOpen}>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Filter cash flow chart</DialogTitle>
+                    <DialogDescription>
+                      Choose one month, a date range, or a full calendar year.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-3 gap-2" role="group" aria-label="Chart filter type">
+                      {([
+                        ["month", "Month"],
+                        ["dates", "Date range"],
+                        ["year", "Year"],
+                      ] as const).map(([type, label]) => (
+                        <Button
+                          key={type}
+                          type="button"
+                          variant={chartFilterType === type ? "default" : "outline"}
+                          aria-pressed={chartFilterType === type}
+                          onClick={() => setChartFilterType(type)}
+                        >
+                          {label}
+                        </Button>
+                      ))}
+                    </div>
+                    {chartFilterType === "month" && (
+                      <div className="space-y-2">
+                        <Label htmlFor="chart-filter-month">Month</Label>
+                        <div className="relative">
+                          <CalendarDays className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                          <input
+                            id="chart-filter-month"
+                            type="month"
+                            value={chartMonth}
+                            onChange={(event) => setChartMonth(event.target.value)}
+                            className="h-10 w-full rounded-md border border-input bg-background pl-10 pr-3 text-sm"
+                          />
+                        </div>
+                      </div>
+                    )}
+                    {chartFilterType === "dates" && (
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="space-y-2">
+                          <Label htmlFor="chart-filter-from">From date</Label>
+                          <DateFilterInput
+                            id="chart-filter-from"
+                            value={chartFrom}
+                            onChange={setChartFrom}
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="chart-filter-to">To date</Label>
+                          <DateFilterInput
+                            id="chart-filter-to"
+                            value={chartTo}
+                            onChange={setChartTo}
+                          />
+                        </div>
+                      </div>
+                    )}
+                    {chartFilterType === "year" && (
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <Label>Choose year</Label>
+                          <div className="flex items-center gap-1">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon-sm"
+                              aria-label="Previous years"
+                              onClick={() => setYearRangeStart((year) => year - 12)}
+                            >
+                              <ChevronLeft />
+                            </Button>
+                            <span className="min-w-24 text-center text-sm font-medium">
+                              {yearRangeStart}–{yearRangeStart + 11}
+                            </span>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon-sm"
+                              aria-label="Next years"
+                              onClick={() => setYearRangeStart((year) => year + 12)}
+                            >
+                              <ChevronRight />
+                            </Button>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-4 gap-2">
+                          {Array.from({ length: 12 }, (_, index) => String(yearRangeStart + index)).map((year) => (
+                            <Button
+                              key={year}
+                              type="button"
+                              size="sm"
+                              variant={chartYear === year ? "default" : "outline"}
+                              aria-pressed={chartYear === year}
+                              onClick={() => setChartYear(year)}
+                            >
+                              {year}
+                            </Button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <DialogFooter>
+                    <Button type="button" variant="outline" onClick={resetChartFilter}>
+                      <RotateCcw className="size-4" />
+                      Reset
+                    </Button>
+                    <Button type="button" onClick={applyChartFilter}>Apply filter</Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+
+              {/* Finance-specific expense and collection insights */}
               <div className="grid gap-6 lg:grid-cols-2">
-                {/* Expense Breakdown Pie Chart */}
                 <Card>
                   <CardHeader>
                     <CardTitle>Expense Breakdown</CardTitle>
@@ -777,45 +1126,51 @@ export default function AdminFinancePage() {
                   </CardContent>
                 </Card>
 
-                {/* Branch-wise Revenue Bar Chart */}
                 <Card>
                   <CardHeader>
-                    <CardTitle>Branch-wise Revenue</CardTitle>
-                    <CardDescription>Revenue comparison across branches</CardDescription>
+                    <CardTitle>Collections by Payment Method</CardTitle>
+                    <CardDescription>Paid revenue split by how it was collected</CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <ResponsiveContainer width="100%" height={350}>
-                      <BarChart data={branchData} layout="vertical">
-                        <CartesianGrid {...gridStyle} />
-                        <XAxis
-                          type="number"
-                          tick={axisStyle}
-                          tickFormatter={(value) => `₹${(value / 100000).toFixed(1)}L`}
-                        />
-                        <YAxis
-                          type="category"
-                          dataKey="branch"
-                          tick={axisStyle}
-                          width={100}
-                        />
+                    <ResponsiveContainer width="100%" height={300}>
+                      <PieChart>
+                        <Pie
+                          data={paymentMethodData}
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={60}
+                          outerRadius={100}
+                          paddingAngle={5}
+                          dataKey="value"
+                        >
+                          {paymentMethodData.map((entry, index) => (
+                            <Cell
+                              key={entry.name}
+                              fill={CHART_PALETTE[index % CHART_PALETTE.length]}
+                            />
+                          ))}
+                        </Pie>
                         <Tooltip
                           contentStyle={tooltipStyle}
-                          formatter={(value) => [`₹${(Number(value) / 100000).toFixed(1)}L`, "Revenue"]}
+                          formatter={(value) => [formatCurrencyINR(Number(value)), "Collected"]}
                         />
-                        <Bar dataKey="revenue" radius={[0, 8, 8, 0]}>
-                          {branchData.map((entry, index) => (
-                            <Cell key={`cell-${index}`} fill={CHART_PALETTE[index % CHART_PALETTE.length]} />
-                          ))}
-                        </Bar>
-                      </BarChart>
+                        <Legend />
+                      </PieChart>
                     </ResponsiveContainer>
-                    <div className="mt-4 space-y-3">
-                      {branchData.map((branch) => (
-                        <div key={branch.branch} className="flex items-center justify-between">
-                          <span className="text-sm font-medium">{branch.branch}</span>
-                          <span className="text-sm text-muted-foreground">
-                            ₹{(branch.revenue / 100000).toFixed(1)}L
-                          </span>
+                    <div className="mt-4 space-y-2">
+                      {paymentMethodData.map((item, index) => (
+                        <div key={item.name} className="flex items-center justify-between text-sm">
+                          <div className="flex items-center gap-2">
+                            <div
+                              className="h-3 w-3 rounded-full"
+                              style={{ backgroundColor: CHART_PALETTE[index % CHART_PALETTE.length] }}
+                            />
+                            <span>{item.name}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-muted-foreground">{formatCurrencyINR(item.value)}</span>
+                            <Badge variant="secondary">{item.percentage}%</Badge>
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -823,31 +1178,37 @@ export default function AdminFinancePage() {
                 </Card>
               </div>
 
-              {/* Revenue by Course */}
+              {/* Expense category movement over the selected time range */}
               <Card>
                 <CardHeader>
-                  <CardTitle>Revenue by Course</CardTitle>
-                  <CardDescription>Course-wise revenue breakdown</CardDescription>
+                  <CardTitle>Expense Trends by Category</CardTitle>
+                  <CardDescription>{selectedPeriodDescription} · top expense categories</CardDescription>
                 </CardHeader>
-                <CardContent className="space-y-5">
-                  {courseRevenue.map((course) => (
-                    <div key={course.name} className="space-y-2">
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="font-medium truncate pr-2">
-                          {course.name}
-                        </span>
-                        <span className="text-muted-foreground whitespace-nowrap">
-                          {course.amount}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Progress value={course.percentage} className="h-2 flex-1" />
-                        <span className="text-xs text-muted-foreground w-8 text-right">
-                          {course.percentage}%
-                        </span>
-                      </div>
-                    </div>
-                  ))}
+                <CardContent>
+                  <ResponsiveContainer width="100%" height={320}>
+                    <BarChart data={expenseTrend}>
+                      <CartesianGrid {...gridStyle} />
+                      <XAxis dataKey="period" tick={axisStyle} />
+                      <YAxis
+                        tick={axisStyle}
+                        tickFormatter={(value) => `₹${(Number(value) / 1000).toFixed(0)}K`}
+                      />
+                      <Tooltip
+                        contentStyle={tooltipStyle}
+                        formatter={(value, name) => [formatCurrencyINR(Number(value)), String(name)]}
+                      />
+                      <Legend />
+                      {expenseCategories.map((category, index) => (
+                        <Bar
+                          key={category}
+                          dataKey={category}
+                          stackId="expenses"
+                          fill={CHART_PALETTE[index % CHART_PALETTE.length]}
+                          radius={index === expenseCategories.length - 1 ? 4 : 0}
+                        />
+                      ))}
+                    </BarChart>
+                  </ResponsiveContainer>
                 </CardContent>
               </Card>
 
@@ -927,7 +1288,7 @@ export default function AdminFinancePage() {
                             </Badge>
                           </TableCell>
                           <TableCell className="text-right">
-                            {txn.type === "expense" && (
+                            {txn.type === "expense" && !txn.teacherSalary && (
                               <Button
                                 variant="ghost"
                                 size="icon-sm"

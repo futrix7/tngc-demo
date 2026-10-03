@@ -67,7 +67,9 @@ export async function POST(request: Request) {
   if (!/^(upi|cash|bank)$/.test(method)) {
     return NextResponse.json({ error: "Choose a valid payment method." }, { status: 400 })
   }
-
+  if (reference.length > 200) {
+    return NextResponse.json({ error: "Payment reference must be 200 characters or fewer." }, { status: 400 })
+  }
   const feeId = typeof body.feeId === "string" ? body.feeId.trim() : ""
 
   if (!UUID_PATTERN.test(feeId)) {

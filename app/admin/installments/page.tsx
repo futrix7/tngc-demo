@@ -44,12 +44,16 @@ import { useToast } from "@/components/ui/sonner"
 import { FilterDialog, type FilterField, type FilterValues } from "@/components/admin/filter-dialog"
 import { CollectDialog, type CollectibleInstallment } from "@/components/admin/collect-dialog"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { PaymentReceiptButton } from "@/components/shared/payment-receipt-button"
 
 interface Installment {
   id: string
+  statementSerial: number
   feeId: string
   studentId: string
   studentName: string
+  studentPhone: string | null
+  studentEmail: string | null
   course: string
   label: string
   installmentNo: number
@@ -70,6 +74,8 @@ interface Installment {
 interface StudentMapEntry {
   full_name: string | null
   branch_id: string | null
+  email: string | null
+  phone: string | null
 }
 
 function unwrapFirst<T>(value: T | T[] | null | undefined): T | null {
@@ -241,11 +247,11 @@ export default function InstallmentsPage() {
       .filter(Boolean))] as string[]
 
     const [studentsRes, coursesRes] = await Promise.all([
-      supabase.from("students").select("id, full_name, branch_id").in("id", studentIds),
+      supabase.from("students").select("id, full_name, branch_id, email, phone").in("id", studentIds),
       supabase.from("courses").select("slug, name, short_name").in("slug", courseSlugs),
     ])
 
-    const studentsMap: Record<string, StudentMapEntry> = Object.fromEntries((studentsRes.data || []).map((s) => [s.id, s]))
+    const studentsById = new Map((studentsRes.data || []).map((student) => [student.id, student]))
     const coursesMap: Record<string, string> = Object.fromEntries((coursesRes.data || []).map((c) => [c.slug, c.short_name || c.name]))
 
     const branchIds = [...new Set((studentsRes.data || []).map((s) => s.branch_id).filter(Boolean))] as string[]
@@ -266,7 +272,12 @@ export default function InstallmentsPage() {
       // installment_no is stored, not counted from row order. It used to be
       // derived from how many rows had been seen for the fee, which silently
       // renumbered a schedule whenever the query's ordering changed.
-      const student = studentsMap[studentId] ?? (studentInfo ? { full_name: studentInfo.full_name ?? null, branch_id: studentInfo.branch_id ?? null } : null)
+      const student = studentsById.get(studentId) ?? (studentInfo ? {
+        full_name: studentInfo.full_name ?? null,
+        branch_id: studentInfo.branch_id ?? null,
+        email: null,
+        phone: null,
+      } : null)
       const branchName = student ? (branchesMap[student.branch_id ?? ""] || "N/A") : "N/A"
       const courseName = coursesMap[courseSlug] || courseSlug || "N/A"
       const ledgerPaid = paidByInstallment[row.id] ?? 0
@@ -278,9 +289,12 @@ export default function InstallmentsPage() {
 
       return {
         id: row.id,
+        statementSerial: row.statement_serial,
         feeId,
         studentId,
         studentName: student?.full_name ?? "Unknown",
+        studentPhone: student?.phone ?? null,
+        studentEmail: student?.email ?? null,
         course: courseName,
         label: row.label,
         installmentNo: row.installment_no ?? 0,
@@ -761,6 +775,26 @@ export default function InstallmentsPage() {
                   </div>
 
                   <div className="flex min-h-10 items-center justify-end gap-2 border-t pt-2">
+                    <PaymentReceiptButton
+                      receipt={{
+                        kind: "installment",
+                        documentNumber: inst.id,
+                        statementSerial: inst.statementSerial,
+                        date: inst.dueDate,
+                        status: inst.pendingPaymentIds.length > 0 ? "Pending" : inst.status,
+                        studentName: inst.studentName,
+                        studentId: inst.studentId,
+                        studentPhone: inst.studentPhone,
+                        course: inst.course,
+                        installment: inst.label,
+                        dueDate: inst.dueDate,
+                        feeAmount: inst.amount,
+                        paidToDate: inst.paidAmount,
+                        awaitingVerification: inst.pendingClaimAmount,
+                        balanceDue: inst.remainingBalance,
+                        reference: inst.pendingReference,
+                      }}
+                    />
                     {inst.pendingPaymentIds.length > 0 ? (
                       <Button
                         size="sm"
@@ -833,7 +867,7 @@ export default function InstallmentsPage() {
                 <TableHead className="hidden lg:table-cell">Due Date</TableHead>
                 <TableHead className="hidden lg:table-cell">Paid Date</TableHead>
                 <TableHead>Status</TableHead>
-                <TableHead className="w-10"></TableHead>
+                <TableHead className="w-20">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -899,6 +933,26 @@ export default function InstallmentsPage() {
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1">
+                        <PaymentReceiptButton
+                          receipt={{
+                            kind: "installment",
+                            documentNumber: inst.id,
+                            statementSerial: inst.statementSerial,
+                            date: inst.dueDate,
+                            status: inst.pendingPaymentIds.length > 0 ? "Pending" : inst.status,
+                            studentName: inst.studentName,
+                            studentId: inst.studentId,
+                            studentPhone: inst.studentPhone,
+                            course: inst.course,
+                            installment: inst.label,
+                            dueDate: inst.dueDate,
+                            feeAmount: inst.amount,
+                            paidToDate: inst.paidAmount,
+                            awaitingVerification: inst.pendingClaimAmount,
+                            balanceDue: inst.remainingBalance,
+                            reference: inst.pendingReference,
+                          }}
+                        />
                         {inst.pendingPaymentIds.length > 0 ? (
                           <Button
                             size="sm"

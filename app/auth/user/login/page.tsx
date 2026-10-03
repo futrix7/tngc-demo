@@ -267,7 +267,7 @@ export default function UserLoginPage() {
               {loading ? (
                 <>
                   <Loader2 className="size-4 animate-spin" />
-                  Signing in...
+                  Wait...
                 </>
               ) : (
                 <>

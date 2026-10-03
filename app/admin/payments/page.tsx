@@ -26,6 +26,10 @@ import {
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { ExportDialog } from "@/components/admin/export-dialog"
+import { PrintButton } from "@/components/shared/print-button"
+import { PaymentReceiptButton } from "@/components/shared/payment-receipt-button"
+import { inr, printDate, type PrintReport } from "@/lib/print-report"
+import { paymentStatusCellLabel, paymentStatusTone } from "@/lib/payment-status"
 import { RecordPaymentSheet } from "@/components/admin/record-payment-sheet"
 import { FilterDialog, type FilterField, type FilterValues } from "@/components/admin/filter-dialog"
 import { supabase } from "@/lib/supabase"
@@ -45,12 +49,25 @@ type PaymentStatus = "Paid" | "Pending" | "Partial" | "Overdue" | "Rejected"
 
 interface Payment {
   id: string
+  studentId: string | null
   studentName: string
+  studentPhone: string | null
+  studentEmail: string | null
+  branch: string
   course: string
+  installment: string
+  dueDate: string | null
   amount: string
   amountRaw: number
+  feeAmount: number
+  paidToDate: number
+  awaitingVerification: number
   remainingBalance: number | null
+  receiptNumber: string | null
+  receiptSerial: number
+  verifiedAt: string | null
   date: string
+  rawDate: string
   method: string
   status: PaymentStatus
   /** What the student says they paid against — the UPI reference, if they gave one. */
@@ -110,7 +127,7 @@ export default function PaymentsPage() {
     const safeTerm = search.trim().slice(0, 80).replace(/[^\p{L}\p{N}\s@._+-]/gu, "")
     let query = supabase
       .from("payments")
-      .select("id, student_name, course_slug, amount, payment_date, method, status, description, installment_id", { count: "exact" })
+      .select("id, student_id, student_name, course_slug, amount, payment_date, method, status, description, installment_id, receipt_no, receipt_serial, verified_at", { count: "exact" })
       .order("payment_date", { ascending: false })
     if (selectedFilters.status !== "all") query = query.eq("status", selectedFilters.status)
     if (selectedFilters.from) query = query.gte("payment_date", selectedFilters.from)
@@ -137,36 +154,53 @@ export default function PaymentsPage() {
     setPaymentsError(false)
 
     const slugs = [...new Set((paymentsData ?? []).map((payment) => payment.course_slug).filter(Boolean))] as string[]
+    const studentIds = [...new Set((paymentsData ?? []).map((payment) => payment.student_id).filter(Boolean))] as string[]
     const installmentIds = [
       ...new Set((paymentsData ?? []).map((payment) => payment.installment_id).filter(Boolean)),
     ] as string[]
-    const [coursesResult, installmentsResult] = await Promise.all([
+    const [coursesResult, installmentsResult, studentsResult] = await Promise.all([
       slugs.length
         ? supabase.from("courses").select("slug, name, short_name").in("slug", slugs)
         : Promise.resolve({ data: [] as { slug: string; name: string; short_name: string }[], error: null }),
       installmentIds.length
-        ? supabase.from("fee_installments").select("id, fee_id").in("id", installmentIds)
-        : Promise.resolve({ data: [] as { id: string; fee_id: string }[], error: null }),
+        ? supabase.from("fee_installments").select("id, fee_id, label, due_date").in("id", installmentIds)
+        : Promise.resolve({ data: [] as { id: string; fee_id: string; label: string; due_date: string }[], error: null }),
+      studentIds.length
+        ? supabase.from("students").select("id, full_name, phone, email, branch_id").in("id", studentIds)
+        : Promise.resolve({ data: [] as { id: string; full_name: string; phone: string; email: string | null; branch_id: string | null }[], error: null }),
     ])
-    if (coursesResult.error || installmentsResult.error) {
-      console.error("Error fetching payment details:", coursesResult.error ?? installmentsResult.error)
+    if (coursesResult.error || installmentsResult.error || studentsResult.error) {
+      console.error("Error fetching payment details:", coursesResult.error ?? installmentsResult.error ?? studentsResult.error)
+      if (activeRequest === requestId.current) setLoading(false)
+      return false
+    }
+
+    const branchIds = [...new Set((studentsResult.data ?? []).map((student) => student.branch_id).filter(Boolean))] as string[]
+    const { data: branches, error: branchesError } = branchIds.length
+      ? await supabase.from("branches").select("id, name").in("id", branchIds)
+      : { data: [] as { id: string; name: string }[], error: null }
+    if (branchesError) {
+      console.error("Error fetching payment branch details:", branchesError.message)
       if (activeRequest === requestId.current) setLoading(false)
       return false
     }
 
     const feeIds = [...new Set((installmentsResult.data ?? []).map((row) => row.fee_id).filter(Boolean))]
-    const { data: feeRows, error: feesError } = feeIds.length
-      ? await supabase.from("fees").select("id, pending_amount").in("id", feeIds)
-      : { data: [] as { id: string; pending_amount: number | null }[], error: null }
+    const { data: feeRows, error: feesError } = studentIds.length
+      ? await supabase.from("fees").select("id, student_id, course_slug, total_fee, paid_amount, pending_amount").in("student_id", studentIds)
+      : feeIds.length
+        ? await supabase.from("fees").select("id, student_id, course_slug, total_fee, paid_amount, pending_amount").in("id", feeIds)
+        : { data: [] as { id: string; student_id: string | null; course_slug: string | null; total_fee: number | null; paid_amount: number | null; pending_amount: number | null }[], error: null }
     if (feesError) {
       console.error("Error fetching payment balances:", feesError.message)
       if (activeRequest === requestId.current) setLoading(false)
       return false
     }
 
-    const { data: feeInstallments, error: feeInstallmentsError } = feeIds.length
-      ? await supabase.from("fee_installments").select("id, fee_id").in("fee_id", feeIds)
-      : { data: [] as { id: string; fee_id: string }[], error: null }
+    const allFeeIds = [...new Set([...(feeRows ?? []).map((fee) => fee.id), ...feeIds])]
+    const { data: feeInstallments, error: feeInstallmentsError } = allFeeIds.length
+      ? await supabase.from("fee_installments").select("id, fee_id, label, due_date").in("fee_id", allFeeIds)
+      : { data: [] as { id: string; fee_id: string; label: string; due_date: string }[], error: null }
     if (feeInstallmentsError) {
       console.error("Error fetching payment installment balances:", feeInstallmentsError.message)
       if (activeRequest === requestId.current) setLoading(false)
@@ -177,10 +211,10 @@ export default function PaymentsPage() {
     const { data: pendingClaims, error: pendingClaimsError } = feeInstallmentIds.length
       ? await supabase
         .from("payments")
-        .select("installment_id, amount")
-        .eq("status", "Pending")
+        .select("installment_id, amount, status")
+        .in("status", ["Paid", "Pending"])
         .in("installment_id", feeInstallmentIds)
-      : { data: [] as { installment_id: string | null; amount: number }[], error: null }
+      : { data: [] as { installment_id: string | null; amount: number; status: string }[], error: null }
     if (pendingClaimsError) {
       console.error("Error fetching pending payment balances:", pendingClaimsError.message)
       if (activeRequest === requestId.current) setLoading(false)
@@ -191,24 +225,57 @@ export default function PaymentsPage() {
     const feeByInstallment = new Map((installmentsResult.data ?? []).map((row) => [row.id, row.fee_id]))
     const feeByInstallmentId = new Map((feeInstallments ?? []).map((row) => [row.id, row.fee_id]))
     const pendingByFee = new Map<string, number>()
+    const paidByFee = new Map<string, number>()
     for (const claim of pendingClaims ?? []) {
       const feeId = claim.installment_id ? feeByInstallmentId.get(claim.installment_id) : undefined
-      if (feeId) pendingByFee.set(feeId, (pendingByFee.get(feeId) ?? 0) + Number(claim.amount))
+      if (!feeId) continue
+      if (claim.status === "Paid") {
+        paidByFee.set(feeId, (paidByFee.get(feeId) ?? 0) + Number(claim.amount))
+      } else {
+        pendingByFee.set(feeId, (pendingByFee.get(feeId) ?? 0) + Number(claim.amount))
+      }
     }
-    const balanceByFee = new Map((feeRows ?? []).map((fee) => [
-      fee.id,
-      Math.max(0, Number((Number(fee.pending_amount ?? 0) - (pendingByFee.get(fee.id) ?? 0)).toFixed(2))),
-    ]))
+    const feeById = new Map((feeRows ?? []).map((fee) => [fee.id, fee]))
+    const studentsById = new Map((studentsResult.data ?? []).map((student) => [student.id, student]))
+    const branchesById = new Map((branches ?? []).map((branch) => [branch.id, branch.name]))
     setPayments((paymentsData ?? []).map((payment) => {
       const feeId = payment.installment_id ? feeByInstallment.get(payment.installment_id) : undefined
+      const student = payment.student_id ? studentsById.get(payment.student_id) : undefined
+      const fee = (feeId ? feeById.get(feeId) : undefined) ??
+        (payment.student_id && payment.course_slug
+          ? (feeRows ?? []).find((row) => row.student_id === payment.student_id && row.course_slug === payment.course_slug)
+          : undefined)
+      const resolvedFeeId = fee?.id ?? feeId
+      const awaitingVerification = resolvedFeeId
+        ? (pendingByFee.get(resolvedFeeId) ?? 0) +
+          (payment.status === "Pending" && !payment.installment_id ? Number(payment.amount) : 0)
+        : payment.status === "Pending" ? Number(payment.amount) : 0
+      const installment = payment.installment_id
+        ? installmentsResult.data?.find((row) => row.id === payment.installment_id)
+        : undefined
       return {
       id: payment.id,
+      studentId: payment.student_id,
       studentName: payment.student_name,
+      studentPhone: student?.phone ?? null,
+      studentEmail: student?.email ?? null,
+      branch: student?.branch_id ? branchesById.get(student.branch_id) ?? "" : "",
       course: payment.course_slug ? courseMap.get(payment.course_slug) ?? payment.course_slug : "N/A",
+      installment: installment?.label ?? "",
+      dueDate: installment?.due_date ?? null,
       amount: `₹${Number(payment.amount).toLocaleString("en-IN")}`,
       amountRaw: Number(payment.amount),
-      remainingBalance: feeId ? balanceByFee.get(feeId) ?? null : null,
+      feeAmount: Number(fee?.total_fee ?? 0),
+      paidToDate: fee ? Number(fee.paid_amount ?? paidByFee.get(fee.id) ?? 0) : 0,
+      awaitingVerification,
+      remainingBalance: fee
+        ? Math.max(0, Number((Number(fee.pending_amount ?? 0) - awaitingVerification).toFixed(2)))
+        : null,
+      receiptNumber: payment.receipt_no,
+      receiptSerial: payment.receipt_serial,
+      verifiedAt: payment.verified_at,
       date: new Date(payment.payment_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }),
+      rawDate: payment.payment_date,
       method: payment.method,
       status: payment.status as PaymentStatus,
       reference: payment.description ?? "",
@@ -282,40 +349,70 @@ export default function PaymentsPage() {
     if (!await fetchPayments(1, searchQuery, nextFilters)) throw new Error("Payment fetch failed")
   }
 
-  async function handleExport() {
-    setExporting(true)
+  /**
+   * Every payment matching the current search and filters — not just the page
+   * on screen. Both the export and the printout promise the whole ledger, so
+   * they share this one pass rather than each paging through it their own way.
+   */
+  async function loadAllPayments() {
     const safeTerm = searchQuery.trim().slice(0, 80).replace(/[^\p{L}\p{N}\s@._+-]/gu, "")
-    const rows: { id: string; student_name: string; course_slug: string | null; amount: number; payment_date: string; method: string; status: string }[] = []
+    const rows: {
+      id: string
+      student_name: string
+      course_slug: string | null
+      amount: number
+      payment_date: string
+      method: string
+      status: string
+      description: string | null
+    }[] = []
     let offset = 0
 
-    try {
-      while (true) {
-        let query = supabase
-          .from("payments")
-          .select("id, student_name, course_slug, amount, payment_date, method, status")
-          .order("payment_date", { ascending: false })
-        if (filters.status !== "all") query = query.eq("status", filters.status)
-        if (filters.from) query = query.gte("payment_date", filters.from)
-        if (filters.to) query = query.lte("payment_date", filters.to)
-        if (safeTerm) query = query.or(`student_name.ilike.%${safeTerm}%,id.ilike.%${safeTerm}%,course_slug.ilike.%${safeTerm}%`)
-        const { data, error } = await query.range(offset, offset + 999)
-        if (error) throw error
-        rows.push(...(data ?? []))
-        if (!data || data.length < 1000) break
-        offset += 1000
-      }
+    while (true) {
+      let query = supabase
+        .from("payments")
+          .select("id, student_name, course_slug, amount, payment_date, method, status, description")
+        .order("payment_date", { ascending: false })
+      if (filters.status !== "all") query = query.eq("status", filters.status)
+      if (filters.from) query = query.gte("payment_date", filters.from)
+      if (filters.to) query = query.lte("payment_date", filters.to)
+      if (safeTerm) query = query.or(`student_name.ilike.%${safeTerm}%,id.ilike.%${safeTerm}%,course_slug.ilike.%${safeTerm}%`)
+      const { data, error } = await query.range(offset, offset + 999)
+      if (error) throw error
+      rows.push(...(data ?? []))
+      if (!data || data.length < 1000) break
+      offset += 1000
+    }
 
-      const slugs = [...new Set(rows.map((row) => row.course_slug).filter(Boolean))] as string[]
-      const { data: courseRows } = slugs.length
-        ? await supabase.from("courses").select("slug, name, short_name").in("slug", slugs)
-        : { data: [] as { slug: string; name: string; short_name: string }[] }
-      const courseNames = new Map((courseRows ?? []).map((row) => [row.slug, row.short_name || row.name]))
+    const slugs = [...new Set(rows.map((row) => row.course_slug).filter(Boolean))] as string[]
+    const { data: courseRows, error: courseError } = slugs.length
+      ? await supabase.from("courses").select("slug, name, short_name").in("slug", slugs)
+      : { data: [] as { slug: string; name: string; short_name: string }[], error: null }
+    if (courseError) throw courseError
+    const courseNames = new Map((courseRows ?? []).map((row) => [row.slug, row.short_name || row.name]))
+
+    return rows.map((row) => ({
+      id: row.id,
+      studentName: row.student_name,
+      course: row.course_slug ? courseNames.get(row.course_slug) ?? row.course_slug : "N/A",
+      amount: Number(row.amount),
+      date: row.payment_date,
+      method: row.method,
+      status: row.status,
+      reference: row.description ?? "",
+    }))
+  }
+
+  async function handleExport() {
+    setExporting(true)
+    try {
+      const rows = await loadAllPayments()
       setExportRows(rows.map((row) => ({
         ID: row.id,
-        Student: row.student_name,
-        Course: row.course_slug ? courseNames.get(row.course_slug) ?? row.course_slug : "N/A",
-        Amount: `₹${Number(row.amount).toLocaleString("en-IN")}`,
-        Date: new Date(row.payment_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }),
+        Student: row.studentName,
+        Course: row.course,
+        Amount: inr(row.amount),
+        Date: printDate(row.date),
         Method: row.method,
         Status: row.status,
       })))
@@ -324,6 +421,68 @@ export default function PaymentsPage() {
       console.error("Error exporting filtered payments:", error)
     } finally {
       setExporting(false)
+    }
+  }
+
+  /** The same ledger, laid out on one A4 sheet. */
+  async function buildPaymentsReport(): Promise<PrintReport> {
+    const rows = await loadAllPayments()
+
+    const sumOf = (status: string) =>
+      rows.filter((row) => row.status === status).reduce((sum, row) => sum + row.amount, 0)
+    const totalValue = rows.reduce((sum, row) => sum + row.amount, 0)
+
+    return {
+      title: "Payments",
+      subtitle: "Payment history and records",
+      meta: [
+        { label: "Status", value: filters.status === "all" ? "All statuses" : paymentStatusCellLabel(filters.status) },
+        {
+          label: "Date range",
+          value: filters.from || filters.to
+            ? `${filters.from ? printDate(filters.from) : "Earliest"} – ${filters.to ? printDate(filters.to) : "Today"}`
+            : "All dates",
+        },
+        { label: "Search", value: searchQuery.trim() || "None" },
+        { label: "Records", value: String(rows.length) },
+      ],
+      stats: [
+        { label: "Payments", value: String(rows.length) },
+        { label: "Total value", value: inr(totalValue) },
+        { label: "Received", value: inr(sumOf("Paid")), tone: "positive" },
+        { label: "Awaiting verification", value: inr(sumOf("Pending")), tone: "warning" },
+        { label: "Rejected", value: inr(sumOf("Rejected")), tone: "muted" },
+      ],
+      sections: [
+        {
+          columns: [
+            { key: "id", label: "Payment ID", width: "17%" },
+            { key: "student", label: "Student", width: "16%" },
+            { key: "course", label: "Course", width: "14%" },
+            { key: "amount", label: "Amount", align: "right", width: "10%" },
+            { key: "date", label: "Date", width: "11%" },
+            { key: "method", label: "Method", width: "8%" },
+            { key: "status", label: "Status", width: "12%" },
+            { key: "reference", label: "Reference", width: "12%" },
+          ],
+          rows: rows.map((row) => ({
+            id: row.id,
+            student: row.studentName,
+            course: row.course,
+            amount: inr(row.amount),
+            date: printDate(row.date),
+            method: row.method,
+            status: { text: paymentStatusCellLabel(row.status), tone: paymentStatusTone(row.status) },
+            reference: row.reference || "—",
+          })),
+          totals: {
+            student: `Total · ${rows.length} payments`,
+            amount: inr(totalValue),
+          },
+          emptyText: "No payments match this search and filter.",
+        },
+      ],
+      note: "Received counts only payments the institute has verified. Amounts awaiting verification or refused are listed above but are not part of the received figure.",
     }
   }
 
@@ -343,6 +502,10 @@ export default function PaymentsPage() {
           <p className="text-xs text-muted-foreground">Payment history and records</p>
         </div>
         <div className="flex items-center gap-2">
+          <PrintButton
+            getReport={buildPaymentsReport}
+            title="Print every payment matching the current search and filter"
+          />
           <Button variant="outline" size="sm" onClick={handleExport} disabled={exporting}>
             <Download className="mr-2 h-4 w-4" />
             {exporting ? "Preparing..." : "Export"}
@@ -426,6 +589,7 @@ export default function PaymentsPage() {
                 <TableHead>Date</TableHead>
                 <TableHead>Method</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead className="w-10"></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -465,6 +629,31 @@ export default function PaymentsPage() {
                             ? "Rejected / reversed"
                             : payment.status}
                       </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <PaymentReceiptButton
+                        receipt={{
+                          kind: "payment",
+                          documentNumber: payment.receiptNumber || payment.id,
+                          receiptSerial: payment.receiptSerial,
+                          date: payment.rawDate,
+                          status: payment.status,
+                          studentName: payment.studentName,
+                          studentId: payment.studentId || "—",
+                          studentPhone: payment.studentPhone,
+                          course: payment.course,
+                          installment: payment.installment || null,
+                          dueDate: payment.dueDate,
+                          feeAmount: payment.feeAmount,
+                          transactionAmount: payment.amountRaw,
+                          paidToDate: payment.paidToDate,
+                          awaitingVerification: payment.awaitingVerification,
+                          balanceDue: payment.remainingBalance ?? 0,
+                          method: payment.method,
+                          reference: payment.reference,
+                          verifiedAt: payment.verifiedAt,
+                        }}
+                      />
                     </TableCell>
                   </TableRow>
                 )

@@ -13,11 +13,13 @@ import { supabase } from "@/lib/supabase"
 import { useToast } from "@/components/ui/sonner"
 import { AWAITING_VERIFICATION, PAYMENT_REJECTED } from "@/lib/payment-status"
 import { UpiPayBlock } from "@/components/student/upi-pay-block"
-import { AmountSplit, MAX_SPLIT_PARTS, readAmountParts } from "@/components/shared/amount-split"
+import { parsePaymentAmount } from "@/lib/amount-split"
 import { getInstallmentPaymentTotals, getRemainingInstallmentBalance } from "@/lib/payment-balances"
+import { PaymentReceiptButton } from "@/components/shared/payment-receipt-button"
 
 interface Installment {
   id: string
+  statementSerial: number
   feeId: string
   courseSlug: string | null
   courseName: string
@@ -101,6 +103,8 @@ export default function StudentFee() {
   const [refreshKey, setRefreshKey] = useState(0)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [studentId, setStudentId] = useState<string | null>(null)
+  const [studentName, setStudentName] = useState("")
+  const [studentPhone, setStudentPhone] = useState<string | null>(null)
   const [awaitingVerification, setAwaitingVerification] = useState<{
     count: number
     amount: number
@@ -136,7 +140,9 @@ export default function StudentFee() {
   const [enrollOpen, setEnrollOpen] = useState(false)
   const [availableCourses, setAvailableCourses] = useState<AvailableCourse[]>([])
   const [selectedCourseSlug, setSelectedCourseSlug] = useState("")
-  const [enrollAmounts, setEnrollAmounts] = useState<string[]>([""])
+  const [enrollPaymentAmount, setEnrollPaymentAmount] = useState("")
+  const [enrollPaymentMethod, setEnrollPaymentMethod] = useState("upi")
+  const [enrollPaymentReference, setEnrollPaymentReference] = useState("")
   const [loadingCourses, setLoadingCourses] = useState(false)
   const [enrolling, setEnrolling] = useState(false)
 
@@ -150,7 +156,7 @@ export default function StudentFee() {
 
       const { data: student, error: studentError } = await supabase
         .from("students")
-        .select("id, course_slug, full_name, branch_id")
+        .select("id, course_slug, full_name, branch_id, phone")
         .eq("user_id", user.id)
         .single()
 
@@ -164,6 +170,8 @@ export default function StudentFee() {
       if (!student) { setLoading(false); return }
 
       setStudentId(student.id)
+      setStudentName(student.full_name)
+      setStudentPhone(student.phone)
 
       // Every enrolled course has its own fees row, so this is a list. It used to
       // be read with .single(), which fails outright the moment a student enrols
@@ -320,6 +328,7 @@ export default function StudentFee() {
 
           return {
             id: i.id as string,
+            statementSerial: i.statement_serial as number,
             feeId: i.fee_id as string,
             courseSlug: (feeRow?.course_slug ?? null) as string | null,
             courseName: nameFor((feeRow?.course_slug ?? null) as string | null),
@@ -416,6 +425,9 @@ export default function StudentFee() {
     setEnrollOpen(true)
     setLoadingCourses(true)
     setSelectedCourseSlug("")
+    setEnrollPaymentAmount("")
+    setEnrollPaymentMethod("upi")
+    setEnrollPaymentReference("")
 
     const { data, error } = await supabase
       .from("courses")
@@ -443,24 +455,18 @@ export default function StudentFee() {
     if (enrolling || !selectedCourseSlug) return
 
     const course = availableCourses.find((item) => item.slug === selectedCourseSlug)
-    const split = readAmountParts(enrollAmounts)
+    const payment = parsePaymentAmount(enrollPaymentAmount.trim() || null)
 
-    if (split.error) {
-      toast(split.error, { variant: "destructive" })
+    if (payment.error) {
+      toast(payment.error, { variant: "destructive" })
       return
     }
 
-    if (split.amounts.length > 0 && course) {
-      const sum = Number(
-        split.amounts.reduce((total, part) => total + part, 0).toFixed(2)
-      )
-      if (Math.abs(sum - course.fee) > 0.005) {
-        toast(
-          `The installments must add up to ₹${course.fee.toLocaleString("en-IN")}. They add up to ₹${sum.toLocaleString("en-IN")}.`,
-          { variant: "destructive" }
-        )
-        return
-      }
+    if (payment.amount !== null && course && payment.amount > course.fee) {
+      toast(`The amount cannot exceed the course fee of ₹${course.fee.toLocaleString("en-IN")}.`, {
+        variant: "destructive",
+      })
+      return
     }
 
     setEnrolling(true)
@@ -482,10 +488,16 @@ export default function StudentFee() {
         },
         body: JSON.stringify({
           courseSlug: selectedCourseSlug,
-          installmentAmounts: split.amounts.length > 0 ? split.amounts : null,
+          paymentAmount: payment.amount,
+          paymentMethod: enrollPaymentMethod,
+          paymentReference: enrollPaymentReference.trim(),
         }),
       })
-      const result = (await response.json()) as { error?: string; totalFee?: number }
+      const result = (await response.json()) as {
+        error?: string
+        totalFee?: number
+        paymentClaimedAmount?: number | null
+      }
 
       if (!response.ok) {
         toast(result.error ?? "We couldn't add that course.", { variant: "destructive" })
@@ -493,10 +505,18 @@ export default function StudentFee() {
       }
 
       const courseName = course?.name
-      toast(`${courseName ?? "Course"} added. Its installment schedule is ready.`, { variant: "success" })
+      const claimedAmount = Number(result.paymentClaimedAmount ?? 0)
+      const remainingAmount = Math.max(0, Number((Number(result.totalFee ?? course?.fee ?? 0) - claimedAmount).toFixed(2)))
+      toast(
+        claimedAmount > 0
+          ? `${courseName ?? "Course"} added. ₹${claimedAmount.toLocaleString("en-IN")} submitted for verification; ₹${remainingAmount.toLocaleString("en-IN")} remains due.`
+          : `${courseName ?? "Course"} added. The full fee remains due.`,
+        { variant: "success", duration: 6000 }
+      )
       setEnrollOpen(false)
       setSelectedCourseSlug("")
-      setEnrollAmounts([""])
+      setEnrollPaymentAmount("")
+      setEnrollPaymentReference("")
       setRefreshKey((key) => key + 1)
     } catch {
       toast("We couldn't add that course. Please try again.", { variant: "destructive" })
@@ -811,15 +831,19 @@ export default function StudentFee() {
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="pay-reference">UPI reference (optional)</Label>
+                    <Label htmlFor="pay-reference">
+                      {method === "upi" ? "UTR number (optional)" : "Transaction reference (optional)"}
+                    </Label>
                     <Input
                       id="pay-reference"
                       value={reference}
                       onChange={(e) => setReference(e.target.value)}
-                      placeholder="Enter the transaction ID"
+                      placeholder={method === "upi" ? "Enter your UTR number (optional)" : "Enter the transaction ID"}
                     />
                     <p className="text-xs text-muted-foreground">
-                      This helps us verify your payment faster. We check it by hand.
+                      {method === "upi"
+                        ? "Enter the UTR shown in your UPI payment confirmation."
+                        : "This helps us verify your payment faster."}
                     </p>
                   </div>
 
@@ -846,21 +870,20 @@ export default function StudentFee() {
                     </div>
                   </div>
 
-                  {/* Only for UPI: a QR to scan or a number to read out is
-                      meaningless when the student is walking into the institute
-                      with cash, or transferring from a bank branch. */}
                   {method === "upi" && (
-                    <UpiPayBlock
-                      amount={payTotal > 0 ? payTotal : null}
-                      note="Pay the amount above, then confirm. Our team verifies the reference before the balance updates."
-                    />
+                    <UpiPayBlock />
                   )}
 
                   <div className="space-y-2">
                     <Button
                       className="w-full gap-2"
                       onClick={handlePay}
-                      disabled={paying || !payingCourse || Boolean(payProblem) || payTotal <= 0}
+                      disabled={
+                        paying
+                        || !payingCourse
+                        || Boolean(payProblem)
+                        || payTotal <= 0
+                      }
                     >
                       {paying ? (
                         <>
@@ -884,7 +907,7 @@ export default function StudentFee() {
               <DialogHeader>
                 <DialogTitle>Enroll in another course</DialogTitle>
                 <DialogDescription>
-                  Add a course to your student account. Its fee and installment schedule will appear here.
+                  Add a course and optionally submit a custom payment amount for verification.
                 </DialogDescription>
               </DialogHeader>
 
@@ -915,23 +938,101 @@ export default function StudentFee() {
                     </select>
                   </div>
 
-                  {selectedCourseSlug && (
-                    <AmountSplit
-                      compact
-                      values={enrollAmounts}
-                      onChange={setEnrollAmounts}
-                      label="How would you like the fee scheduled?"
-                      target={
-                        availableCourses.find((course) => course.slug === selectedCourseSlug)?.fee ?? null
-                      }
-                      partLabels={Array.from({ length: Math.max(enrollAmounts.length, 1) }, (_, i) => `Installment ${i + 1}`)}
-                      hint={`Up to ${MAX_SPLIT_PARTS}, in your own amounts. Leave every box blank and the whole fee becomes one line you can pay any part of later.`}
-                    />
-                  )}
+                  {selectedCourseSlug && (() => {
+                    const course = availableCourses.find((item) => item.slug === selectedCourseSlug)
+                    const parsedAmount = parsePaymentAmount(enrollPaymentAmount.trim() || null)
+                    const paymentAmount = parsedAmount.amount ?? 0
+                    const remainingAmount = Math.max(0, (course?.fee ?? 0) - paymentAmount)
 
-                  <Button className="w-full gap-2" onClick={handleAddCourse} disabled={enrolling || !selectedCourseSlug}>
+                    return (
+                      <>
+                        <div className="space-y-2">
+                          <Label htmlFor="enroll-payment-amount">Custom amount to pay</Label>
+                          <Input
+                            id="enroll-payment-amount"
+                            type="number"
+                            inputMode="numeric"
+                            min="1"
+                            max={course?.fee}
+                            step="1"
+                            value={enrollPaymentAmount}
+                            onChange={(event) => setEnrollPaymentAmount(event.target.value)}
+                            placeholder="Enter an amount or leave blank to pay later"
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            Enter one custom amount. You do not need to divide the fee into installments.
+                          </p>
+                        </div>
+
+                        {paymentAmount > 0 && (
+                          <>
+                            <div className="space-y-2">
+                              <Label>Payment method</Label>
+                              <div className="flex flex-wrap gap-x-5 gap-y-2">
+                                {[
+                                  { value: "upi", label: "UPI" },
+                                  { value: "cash", label: "Cash" },
+                                  { value: "bank", label: "Bank Transfer" },
+                                ].map((option) => (
+                                  <label key={option.value} className="flex cursor-pointer items-center gap-2">
+                                    <input
+                                      type="radio"
+                                      name="enroll-payment-method"
+                                      value={option.value}
+                                      checked={enrollPaymentMethod === option.value}
+                                      onChange={(event) => setEnrollPaymentMethod(event.target.value)}
+                                      className="accent-primary"
+                                    />
+                                    <span className="text-sm">{option.label}</span>
+                                  </label>
+                                ))}
+                              </div>
+                            </div>
+
+                            <div className="space-y-2">
+                              <Label htmlFor="enroll-payment-reference">
+                                {enrollPaymentMethod === "upi" ? "UTR number (optional)" : "Transaction reference (optional)"}
+                              </Label>
+                              <Input
+                                id="enroll-payment-reference"
+                                value={enrollPaymentReference}
+                                onChange={(event) => setEnrollPaymentReference(event.target.value)}
+                                placeholder={enrollPaymentMethod === "upi" ? "Enter your UTR number (optional)" : "Enter the transaction ID"}
+                              />
+                            </div>
+
+                            {enrollPaymentMethod === "upi" && (
+                              <UpiPayBlock />
+                            )}
+                          </>
+                        )}
+
+                        <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-800 dark:text-amber-300">
+                          <p className="font-semibold">
+                            ₹{remainingAmount.toLocaleString("en-IN")} will remain due
+                          </p>
+                          <p className="mt-1 text-xs text-amber-800/80 dark:text-amber-300/80">
+                            The unpaid balance will appear in the yellow pending-fee reminder. Any submitted amount stays pending until verified.
+                          </p>
+                        </div>
+                      </>
+                    )
+                  })()}
+
+                  <Button
+                    className="w-full gap-2"
+                    onClick={handleAddCourse}
+                    disabled={
+                      enrolling
+                      || !selectedCourseSlug
+                    }
+                  >
                     {enrolling ? <Loader2 className="size-4 animate-spin" /> : <BookOpen className="size-4" />}
-                    {enrolling ? "Adding course..." : "Add Course"}
+                    {enrolling
+                      ? "Submitting..."
+                      : enrollPaymentAmount.trim()
+                        ? "Add Course & Submit Payment"
+                        : "Add Course"}
                   </Button>
                 </div>
               )}
@@ -1109,7 +1210,7 @@ export default function StudentFee() {
                     )}
                   </div>
                 </div>
-                <div className="ml-4 shrink-0 text-right">
+                <div className="ml-4 flex shrink-0 items-center gap-2 text-right">
                   <p className="text-sm font-bold lg:text-base">₹{inst.remainingBalance.toLocaleString("en-IN")}</p>
                   {inst.remainingBalance < inst.amount && (
                     <p className="text-[10px] text-muted-foreground">of ₹{inst.amount.toLocaleString("en-IN")}</p>
@@ -1138,6 +1239,25 @@ export default function StudentFee() {
                       {inst.status}
                     </Badge>
                   )}
+                  <PaymentReceiptButton
+                    receipt={{
+                      kind: "installment",
+                      documentNumber: inst.id,
+                      statementSerial: inst.statementSerial,
+                      date: inst.dueDate,
+                      status: inst.status,
+                      studentName: studentName || "Student",
+                      studentId: studentId || "—",
+                      studentPhone,
+                      course: inst.courseName,
+                      installment: inst.label,
+                      dueDate: inst.dueDate,
+                      feeAmount: inst.amount,
+                      paidToDate: inst.paidAmount,
+                      awaitingVerification: inst.pendingClaimAmount,
+                      balanceDue: inst.remainingBalance,
+                    }}
+                  />
                 </div>
               </div>
             ))}

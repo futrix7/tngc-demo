@@ -90,41 +90,46 @@ export default function TeachersPage() {
       return;
     }
 
-    const monthStart = `${month}-01`;
-    const monthEnd = new Date(`${month}-15T12:00:00`);
-    monthEnd.setMonth(monthEnd.getMonth() + 1, 0);
-    const monthEndIso = monthEnd.toISOString().slice(0, 10);
+    const recentPaymentThreshold = new Date(Date.now() - 20 * 24 * 60 * 60 * 1000).toISOString();
 
     const { data: existingSalary, error: lookupError } = await supabase
       .from("transactions")
       .select("id")
       .eq("type", "expense")
       .eq("category", "Salary")
-      .ilike("description", `%Teacher salary - ${teacher.name} - ${month}%`)
-      .gte("date", monthStart)
-      .lte("date", monthEndIso)
+      .eq("teacher_id", teacher.id)
+      .gte("created_at", recentPaymentThreshold)
       .limit(1)
       .maybeSingle();
 
-    if (lookupError && lookupError.code !== "PGRST116") {
-      toast("Unable to verify prior salary payment: " + lookupError.message, { variant: "destructive" });
+    if (lookupError) {
+      console.error("[teachers] salary eligibility check failed:", lookupError.message);
+      toast("Unable to verify salary eligibility. Please try again.", { variant: "destructive" });
       return;
     }
 
     if (existingSalary) {
-      toast(`Salary for ${teacher.name} is already recorded for ${month}.`, { variant: "warning" });
+      toast("A recent salary payment is already recorded for this teacher.", { variant: "warning" });
       setSalaryOpen(false);
       setSalaryTeacher(null);
       return;
     }
 
+    const paidOn = new Date();
+    const paidDate = [
+      paidOn.getFullYear(),
+      String(paidOn.getMonth() + 1).padStart(2, "0"),
+      String(paidOn.getDate()).padStart(2, "0"),
+    ].join("-");
+
     const { error } = await supabase.from("transactions").insert({
-      date: new Date(`${month}-01T12:00:00`).toISOString().slice(0, 10),
+      date: paidDate,
       description: `Teacher salary - ${teacher.name} - ${month}`,
       category: "Salary",
       amount,
       type: "expense",
       branch_id: teacher.branchId,
+      teacher_id: teacher.id,
     });
 
     if (error) {

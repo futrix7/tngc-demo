@@ -46,9 +46,11 @@ import { supabase } from "@/lib/supabase"
 import { localDate } from "@/lib/local-date"
 import { useToast } from "@/components/ui/sonner"
 import { useStudent } from "../layout"
+import { PaymentReceiptButton } from "@/components/shared/payment-receipt-button"
 
 interface Installment {
   id: string
+  statementSerial: number
   label: string
   course: string
   amount: number
@@ -128,7 +130,7 @@ export default function StudentInstallmentsPage() {
 
       const [instResult, coursesResult] = await Promise.all([
         supabase
-          .from("fee_installments").select("id, label, amount, due_date, paid_date, status, fee_id")
+          .from("fee_installments").select("id, statement_serial, label, amount, due_date, paid_date, status, fee_id")
           .in("fee_id", feeIds).order("due_date", { ascending: true }),
         courseSlugs.length
           ? supabase.from("courses").select("slug, name, short_name").in("slug", courseSlugs)
@@ -214,6 +216,7 @@ export default function StudentInstallmentsPage() {
         const claim = claimedBy[row.id]
         return {
           id: row.id,
+          statementSerial: row.statement_serial,
           label: row.label,
           course: nameBySlug.get(slugByFee.get(row.fee_id) ?? "") ?? slugByFee.get(row.fee_id) ?? "Course",
           amount,
@@ -631,6 +634,26 @@ export default function StudentInstallmentsPage() {
                         </div>
                       </div>
                       <div className="flex min-w-0 flex-wrap items-center justify-between gap-3 sm:shrink-0 sm:justify-end">
+                        <PaymentReceiptButton
+                          receipt={{
+                            kind: "installment",
+                            documentNumber: inst.id,
+                            statementSerial: inst.statementSerial,
+                            date: inst.dueDate,
+                            status: inst.status,
+                            studentName: student?.name ?? "Student",
+                            studentId: student?.id ?? "—",
+                            studentPhone: student?.phone,
+                            course: inst.course,
+                            installment: inst.label,
+                            dueDate: inst.dueDate,
+                            feeAmount: inst.amount,
+                            paidToDate: inst.paidAmount,
+                            awaitingVerification: inst.pendingClaimAmount,
+                            balanceDue: inst.remainingBalance,
+                            reference: inst.pendingReference,
+                          }}
+                        />
                         <div className="text-right">
                           <p className="text-sm font-bold">₹{inst.remainingBalance.toLocaleString()} still due</p>
                           {(inst.paidAmount > 0 || inst.pendingClaimAmount > 0) && (
@@ -677,6 +700,25 @@ export default function StudentInstallmentsPage() {
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-3 sm:shrink-0 sm:justify-end">
+                  <PaymentReceiptButton
+                    receipt={{
+                      kind: "installment",
+                      documentNumber: inst.id,
+                      statementSerial: inst.statementSerial,
+                      date: inst.dueDate,
+                      status: inst.status,
+                      studentName: student?.name ?? "Student",
+                      studentId: student?.id ?? "—",
+                      studentPhone: student?.phone,
+                      course: inst.course,
+                      installment: inst.label,
+                      dueDate: inst.dueDate,
+                      feeAmount: inst.amount,
+                      paidToDate: inst.paidAmount,
+                      awaitingVerification: inst.pendingClaimAmount,
+                      balanceDue: inst.remainingBalance,
+                    }}
+                  />
                   <p className="text-sm font-bold">₹{inst.amount.toLocaleString()}</p>
                   {/* A part payment leaves a line on `Partial`, so the reverse
                       action has to be offered there too — not only on lines the
