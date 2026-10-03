@@ -43,10 +43,21 @@ import { supabase } from "@/lib/supabase"
 import { useToast } from "@/components/ui/sonner"
 import { mintId } from "@/lib/mint-id"
 import { localDate } from "@/lib/local-date"
-import { createCertificateHtml, printCertificate, type PrintableCertificate } from "@/lib/certificate-print"
+import {
+  CERTIFICATE_HEADING,
+  createCertificateHtml,
+  getCertificateCourseName,
+  printCertificate,
+  type PrintableCertificate,
+} from "@/lib/certificate-print"
 
 const DIVISION_OPTIONS = ["First", "Second", "Third"] as const
 const CUSTOM_DIVISION_OPTION = "__custom_division__"
+const EMPTY_CERTIFICATE_DETAILS: CertificateIssueDetails = {
+  courseStartDate: "",
+  courseEndDate: "",
+  division: "",
+}
 
 interface Certificate {
   id: string
@@ -66,6 +77,13 @@ interface StudentOption {
   guardianName: string
   course_slug: string | null
   courseName: string
+  certificateTitles: string[]
+}
+
+interface CertificateIssueDetails {
+  courseStartDate: string
+  courseEndDate: string
+  division: string
 }
 
 const statusConfig: Record<string, { className: string; icon: React.ElementType }> = {
@@ -87,13 +105,13 @@ export default function AdminCertificatesPage() {
   const [studentPickerOpen, setStudentPickerOpen] = useState(false)
   const [students, setStudents] = useState<StudentOption[]>([])
   const [selectedStudent, setSelectedStudent] = useState("")
+  const [selectedCertificateTitles, setSelectedCertificateTitles] = useState<string[]>([])
   const [studentSearch, setStudentSearch] = useState("")
   const [certType, setCertType] = useState("Completion")
   const [issuedDate, setIssuedDate] = useState(localDate)
-  const [courseStartDate, setCourseStartDate] = useState("")
-  const [courseEndDate, setCourseEndDate] = useState("")
-  const [division, setDivision] = useState("")
+  const [detailsByTitle, setDetailsByTitle] = useState<Record<string, CertificateIssueDetails>>({})
   const [customDivision, setCustomDivision] = useState("")
+  const [customDivisionTitle, setCustomDivisionTitle] = useState("")
   const [divisionDialogOpen, setDivisionDialogOpen] = useState(false)
   const [issuing, setIssuing] = useState(false)
 
@@ -118,11 +136,12 @@ export default function AdminCertificatesPage() {
 
     const mapped: Certificate[] = (data || []).map((row) => {
       const course = row.course_slug ? (courseMap.get(row.course_slug) ?? row.course_slug) : "—"
+      const certificateCourse = getCertificateCourseName(row.name, course)
       return {
         id: row.id,
         studentName: row.student_name,
         studentId: row.student_id,
-        course,
+        course: certificateCourse,
         type: row.type,
         issuedDate: row.issued_date || "—",
         credentialId: row.credential_id || "—",
@@ -130,7 +149,8 @@ export default function AdminCertificatesPage() {
         printable: {
           studentName: row.student_name,
           guardianName: row.guardian_name || "",
-          course,
+          displayTitle: CERTIFICATE_HEADING,
+          course: certificateCourse,
           type: row.type,
           name: row.name,
           credentialId: row.credential_id || "—",
@@ -152,7 +172,7 @@ export default function AdminCertificatesPage() {
       supabase.from("students").select("id, full_name, father_name").order("full_name"),
       supabase.from("fee_installments").select("fee_id, status"),
       supabase.from("fees").select("id, student_id, course_slug"),
-      supabase.from("certificates").select("student_id, course_slug, status"),
+      supabase.from("certificates").select("student_id, course_slug, status, name"),
     ])
 
     const installmentRows = instRes.data || []
@@ -163,17 +183,19 @@ export default function AdminCertificatesPage() {
       byFee.set(row.fee_id, arr)
     })
 
-    const issuedKeys = new Set(
-      (certRes.data || [])
-        .filter((row) => row.student_id && row.course_slug && row.status === "Issued")
-        .map((row) => `${row.student_id}:${row.course_slug}`)
-    )
+    const issuedTitlesByCourse = new Map<string, Set<string>>()
+    ;(certRes.data || []).forEach((row) => {
+      if (!row.student_id || !row.course_slug || row.status !== "Issued" || !row.name) return
+      const key = `${row.student_id}:${row.course_slug}`
+      const titles = issuedTitlesByCourse.get(key) ?? new Set<string>()
+      titles.add(row.name)
+      issuedTitlesByCourse.set(key, titles)
+    })
 
     const feeRows = feesRes.data || []
     const eligibleFeeRows = feeRows.filter((fee) => {
       const statuses = byFee.get(fee.id)
-      const key = fee.student_id && fee.course_slug ? `${fee.student_id}:${fee.course_slug}` : null
-      return !!fee.course_slug && !!statuses && statuses.length > 0 && statuses.every((status) => status === "Paid") && (!key || !issuedKeys.has(key))
+      return !!fee.course_slug && !!statuses && statuses.length > 0 && statuses.every((status) => status === "Paid")
     })
 
     const studentsData = studentsRes.data || []
@@ -183,43 +205,70 @@ export default function AdminCertificatesPage() {
     }
 
     const courseSlugs = [...new Set(eligibleFeeRows.map((fee) => fee.course_slug).filter(Boolean))] as string[]
-    let coursesMap: Record<string, string> = {}
+    let coursesMap: Record<string, { name: string; certificateTitles: string[] }> = {}
 
     if (courseSlugs.length > 0) {
-      const { data: coursesData } = await supabase
+      const { data: coursesData, error: coursesError } = await supabase
         .from("courses")
-        .select("slug, name")
+        .select("slug, name, certification, certifications")
         .in("slug", courseSlugs)
+      if (coursesError) {
+        console.error("Error fetching course certificate titles:", coursesError)
+        toast("Unable to load course certificate titles: " + coursesError.message, { variant: "destructive" })
+        setStudents([])
+        return
+      }
       if (coursesData) {
-        coursesMap = Object.fromEntries(coursesData.map((c) => [c.slug, c.name]))
+        coursesMap = Object.fromEntries(coursesData.map((course) => [
+          course.slug,
+          {
+            name: course.name,
+            certificateTitles: Array.isArray(course.certifications) && course.certifications.length > 0
+              ? course.certifications
+              : [course.certification && !/^course completion certificate$/i.test(course.certification)
+                  ? course.certification
+                  : course.name],
+          },
+        ]))
       }
     }
 
     const options: StudentOption[] = []
-    const byStudent = new Map<string, StudentOption[]>()
+    const byStudentAndCourse = new Map<string, StudentOption>()
 
     eligibleFeeRows.forEach((fee) => {
       const student = studentsData.find((item) => item.id === fee.student_id)
       if (!student || !fee.course_slug) return
+      const course = coursesMap[fee.course_slug]
+      if (!course) return
+      const key = `${student.id}:${fee.course_slug}`
+      const issuedTitles = issuedTitlesByCourse.get(key) ?? new Set<string>()
+      const certificateTitles = course.certificateTitles.filter((title) => !issuedTitles.has(title))
+      if (certificateTitles.length === 0) return
 
       const option: StudentOption = {
-        id: `${student.id}:${fee.course_slug}`,
+        id: key,
         full_name: student.full_name,
         guardianName: student.father_name ?? "",
         course_slug: fee.course_slug,
-        courseName: coursesMap[fee.course_slug] ?? fee.course_slug,
+        courseName: course.name,
+        certificateTitles,
       }
 
-      const existing = byStudent.get(student.id) || []
-      existing.push(option)
-      byStudent.set(student.id, existing)
+      byStudentAndCourse.set(key, option)
     })
-
-    byStudent.forEach((items) => {
-      items.forEach((option) => options.push(option))
-    })
+    options.push(...byStudentAndCourse.values())
 
     setStudents(options)
+    const requestedStudentId = new URLSearchParams(window.location.search).get("studentId")
+    const requestedStudent = requestedStudentId
+      ? options.find((option) => option.id.startsWith(`${requestedStudentId}:`))
+      : undefined
+    if (requestedStudent) {
+      setSelectedStudent(requestedStudent.id)
+      setSelectedCertificateTitles(requestedStudent.certificateTitles)
+      setDetailsByTitle({})
+    }
   }
 
   useEffect(() => {
@@ -233,6 +282,14 @@ export default function AdminCertificatesPage() {
       fetchStudents()
     }
   }, [issueOpen])
+
+  useEffect(() => {
+    const requestedStudentId = new URLSearchParams(window.location.search).get("studentId")
+    if (requestedStudentId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- open the issue sheet for a linked student
+      setIssueOpen(true)
+    }
+  }, [])
 
   async function handleIssueCertificate() {
     if (!selectedStudent) {
@@ -250,116 +307,160 @@ export default function AdminCertificatesPage() {
       toast("Please enter a valid certificate issue date.", { variant: "destructive" })
       return
     }
-    if (!validDate(courseStartDate) || !validDate(courseEndDate)) {
-      toast("Please enter valid course start and end dates.", { variant: "destructive" })
+    if (selectedCertificateTitles.length === 0) {
+      toast("Please select at least one certificate title.", { variant: "destructive" })
       return
     }
-    if (courseEndDate < courseStartDate) {
-      toast("The course end date cannot be before its start date.", { variant: "destructive" })
-      return
-    }
-    if (!division.trim()) {
-      toast("Please enter the certificate division.", { variant: "destructive" })
-      return
-    }
-
-    setIssuing(true)
 
     const student = students.find((s) => s.id === selectedStudent)
     if (!student) {
       toast("Student not found", { variant: "destructive" })
-      setIssuing(false)
       return
     }
 
-    const credentialId = `TNGC/${mintId("ROLL").split("-").at(-1)?.toUpperCase() ?? ""}/N`
-    const certId = mintId("CERT")
-    const certificateDetails = {
-      guardian_name: student.guardianName || null,
-      course_start_date: courseStartDate,
-      course_end_date: courseEndDate,
-      division: division.trim(),
-    }
-
-    const { data: existingCert, error: existingError } = await supabase
-      .from("certificates")
-      .select("id, status")
-      .eq("student_id", student.id.split(":")[0])
-      .eq("course_slug", student.course_slug)
-      .limit(1)
-      .maybeSingle()
-
-    if (existingError && existingError.code !== "PGRST116") {
-      setIssuing(false)
-      toast("Failed to verify certificate status: " + existingError.message, { variant: "destructive" })
+    const titlesToIssue = selectedCertificateTitles.filter((title) => student.certificateTitles.includes(title))
+    if (titlesToIssue.length === 0) {
+      toast("No unissued certificate titles are selected. Please choose the student again.", { variant: "destructive" })
       return
     }
 
-    let error
+    for (const title of titlesToIssue) {
+      const details = detailsByTitle[title] ?? EMPTY_CERTIFICATE_DETAILS
+      if (!validDate(details.courseStartDate) || !validDate(details.courseEndDate)) {
+        toast(`Enter valid course start and end dates for "${title}".`, { variant: "destructive" })
+        return
+      }
+      if (details.courseEndDate < details.courseStartDate) {
+        toast(`The course end date cannot be before its start date for "${title}".`, { variant: "destructive" })
+        return
+      }
+      if (!details.division.trim()) {
+        toast(`Please enter the certificate division for "${title}".`, { variant: "destructive" })
+        return
+      }
+    }
 
-    if (existingCert) {
-      ;({ error } = await supabase
-        .from("certificates")
-        .update({
+    setIssuing(true)
+    let issuedCount = 0
+    let failure: { title: string; message: string } | null = null
+    let activeTitle = titlesToIssue[0]
+
+    try {
+      for (const title of titlesToIssue) {
+        activeTitle = title
+        const { data: existingCert, error: existingError } = await supabase
+          .from("certificates")
+          .select("id, status")
+          .eq("student_id", student.id.split(":")[0])
+          .eq("course_slug", student.course_slug)
+          .eq("name", title)
+          .limit(1)
+          .maybeSingle()
+
+        if (existingError && existingError.code !== "PGRST116") {
+          failure = { title, message: existingError.message }
+          break
+        }
+
+        if (existingCert?.status === "Issued") continue
+
+        const details = detailsByTitle[title] ?? EMPTY_CERTIFICATE_DETAILS
+        const credentialId = `TNGC/${mintId("ROLL").split("-").at(-1)?.toUpperCase() ?? ""}/N`
+        const certificateData = {
           student_name: student.full_name,
-          name: `${student.courseName} ${certType} Certificate`,
+          name: title,
           type: certType as "Completion" | "Proficiency" | "Module",
           credential_id: credentialId,
           issued_date: issuedDate,
-          ...certificateDetails,
+          guardian_name: student.guardianName || null,
+          course_start_date: details.courseStartDate,
+          course_end_date: details.courseEndDate,
+          division: details.division.trim(),
           issued_by: "admin",
-          status: "Issued",
+          status: "Issued" as const,
           updated_at: new Date().toISOString(),
-        })
-        .eq("id", existingCert.id))
-    } else {
-      ;({ error } = await supabase.from("certificates").insert({
-        id: certId,
-        student_id: student.id.split(":")[0],
-        student_name: student.full_name,
-        course_slug: student.course_slug,
-        name: `${student.courseName} ${certType} Certificate`,
-        type: certType as "Completion" | "Proficiency" | "Module",
-        credential_id: credentialId,
-        issued_date: issuedDate,
-        ...certificateDetails,
-        issued_by: "admin",
-        status: "Issued",
-      }))
+        }
+
+        const result = existingCert
+          ? await supabase.from("certificates").update(certificateData).eq("id", existingCert.id)
+          : await supabase.from("certificates").insert({
+              id: mintId("CERT"),
+              student_id: student.id.split(":")[0],
+              course_slug: student.course_slug,
+              ...certificateData,
+            })
+
+        if (result.error) {
+          failure = { title, message: result.error.message }
+          break
+        }
+        issuedCount += 1
+      }
+    } catch (error) {
+      failure = {
+        title: activeTitle,
+        message: error instanceof Error ? error.message : "Unexpected error",
+      }
+    } finally {
+      setIssuing(false)
     }
 
-    setIssuing(false)
-
-    if (error) {
-      toast("Failed to issue certificate: " + error.message, { variant: "destructive" })
+    if (failure) {
+      toast(
+        issuedCount > 0
+          ? `Issued ${issuedCount} certificate${issuedCount === 1 ? "" : "s"}, but failed on "${failure.title}": ${failure.message}. Reopen the form to issue the remaining titles.`
+          : `Failed to issue "${failure.title}": ${failure.message}`,
+        { variant: "destructive" }
+      )
+      await Promise.all([fetchCertificates(), fetchStudents()])
       return
     }
 
-    toast("Certificate issued successfully", { variant: "success" })
+    if (issuedCount === 0) {
+      toast("The selected certificate titles have already been issued.", { variant: "destructive" })
+      await fetchStudents()
+      return
+    }
+
+    toast(`${issuedCount} certificate${issuedCount === 1 ? "" : "s"} issued successfully`, { variant: "success" })
     setSelectedStudent("")
+    setSelectedCertificateTitles([])
     setCertType("Completion")
     setIssuedDate(localDate())
-    setCourseStartDate("")
-    setCourseEndDate("")
-    setDivision("")
+    setDetailsByTitle({})
     setCustomDivision("")
+    setCustomDivisionTitle("")
     setIssueOpen(false)
-    fetchCertificates()
+    await fetchCertificates()
   }
 
-  function handleDivisionChange(value: string | null) {
+  function handleDivisionChange(title: string, value: string | null) {
     if (value === "Others") {
+      const division = detailsByTitle[title]?.division ?? ""
       setCustomDivision(DIVISION_OPTIONS.includes(division as typeof DIVISION_OPTIONS[number]) ? "" : division)
+      setCustomDivisionTitle(title)
       setDivisionDialogOpen(true)
       return
     }
-    if (value && value !== CUSTOM_DIVISION_OPTION) setDivision(value)
+    if (value && value !== CUSTOM_DIVISION_OPTION) {
+      setDetailsByTitle((current) => ({
+        ...current,
+        [title]: { ...EMPTY_CERTIFICATE_DETAILS, ...current[title], division: value },
+      }))
+    }
   }
 
   function saveCustomDivision() {
     const trimmed = customDivision.trim()
     if (!trimmed) return
-    setDivision(trimmed)
+    setDetailsByTitle((current) => ({
+      ...current,
+      [customDivisionTitle]: {
+        ...EMPTY_CERTIFICATE_DETAILS,
+        ...current[customDivisionTitle],
+        division: trimmed,
+      },
+    }))
     setDivisionDialogOpen(false)
   }
 
@@ -388,7 +489,7 @@ export default function AdminCertificatesPage() {
     guardianName: "Guardian Name",
     course: "Course Name",
     type: "Completion",
-    name: "Certificate Template",
+    name: CERTIFICATE_HEADING,
     credentialId: "TNGC/9207/N",
     issuedDate: localDate(),
     courseStartDate: "",
@@ -570,19 +671,19 @@ export default function AdminCertificatesPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={issueOpen} onOpenChange={setIssueOpen}>
-        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
+      <Sheet open={issueOpen} onOpenChange={setIssueOpen}>
+        <SheetContent side="right" className="w-full gap-0 overflow-hidden p-0 sm:max-w-xl">
+          <SheetHeader className="border-b pr-12">
+            <SheetTitle className="flex items-center gap-2">
               <Award className="size-5" />
               Issue Certificate
-            </DialogTitle>
-            <DialogDescription>
+            </SheetTitle>
+            <SheetDescription>
               Only students who have completed all their installments can receive a certificate
-            </DialogDescription>
-          </DialogHeader>
+            </SheetDescription>
+          </SheetHeader>
 
-          <div className="flex flex-col gap-4">
+          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-4">
             <div className="space-y-1.5">
               <Label>Student *</Label>
               <Button
@@ -603,6 +704,41 @@ export default function AdminCertificatesPage() {
                   No students have completed all their installments yet.
                 </p>
               )}
+            </div>
+
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <Label>Certificates to issue *</Label>
+                {selectedStudent && (
+                  <span className="text-xs text-muted-foreground">
+                    {selectedCertificateTitles.length} selected
+                  </span>
+                )}
+              </div>
+              <div className="space-y-2 rounded-md border p-3">
+                {(students.find((student) => student.id === selectedStudent)?.certificateTitles ?? []).length > 0 ? (
+                  (students.find((student) => student.id === selectedStudent)?.certificateTitles ?? []).map((title) => (
+                    <label key={title} className="flex cursor-pointer items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        className="size-4 accent-primary"
+                        checked={selectedCertificateTitles.includes(title)}
+                        onChange={(event) => setSelectedCertificateTitles((current) =>
+                          event.target.checked
+                            ? [...current, title]
+                            : current.filter((item) => item !== title)
+                        )}
+                      />
+                      <span>{title}</span>
+                    </label>
+                  ))
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    {selectedStudent ? "All configured certificates have already been issued." : "Choose a student to view available certificates."}
+                  </p>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">All remaining titles are selected by default. Uncheck any you do not want to issue now.</p>
             </div>
 
             <div className="space-y-1.5">
@@ -630,62 +766,90 @@ export default function AdminCertificatesPage() {
               />
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label htmlFor="certificateCourseStartDate">Course Start Date *</Label>
-                <Input
-                  id="certificateCourseStartDate"
-                  type="date"
-                  value={courseStartDate}
-                  onChange={(event) => setCourseStartDate(event.target.value)}
-                  required
-                />
+            <div className="space-y-3">
+              <div>
+                <Label>Course details for each certificate *</Label>
+                <p className="text-xs text-muted-foreground">
+                  Set dates and division separately for each selected certificate. Issue date and type apply to all.
+                </p>
               </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="certificateCourseEndDate">Course End Date *</Label>
-                <Input
-                  id="certificateCourseEndDate"
-                  type="date"
-                  value={courseEndDate}
-                  onChange={(event) => setCourseEndDate(event.target.value)}
-                  required
-                />
-              </div>
-            </div>
+              {selectedCertificateTitles.map((title, index) => {
+                const details = detailsByTitle[title] ?? EMPTY_CERTIFICATE_DETAILS
+                const startId = `certificateCourseStartDate-${index}`
+                const endId = `certificateCourseEndDate-${index}`
+                const divisionId = `certificateDivision-${index}`
+                const isStandardDivision = DIVISION_OPTIONS.includes(details.division as typeof DIVISION_OPTIONS[number])
 
-            <div className="space-y-1.5">
-              <Label htmlFor="certificateDivision">Division *</Label>
-              <Select
-                value={
-                  DIVISION_OPTIONS.includes(division as typeof DIVISION_OPTIONS[number])
-                    ? division
-                    : division
-                      ? CUSTOM_DIVISION_OPTION
-                      : ""
-                }
-                onValueChange={handleDivisionChange}
-              >
-                <SelectTrigger id="certificateDivision">
-                  <SelectValue placeholder="Select division" />
-                </SelectTrigger>
-                <SelectContent>
-                  {DIVISION_OPTIONS.map((option) => (
-                    <SelectItem key={option} value={option}>{option}</SelectItem>
-                  ))}
-                  {division && !DIVISION_OPTIONS.includes(division as typeof DIVISION_OPTIONS[number]) && (
-                    <SelectItem value={CUSTOM_DIVISION_OPTION}>{division}</SelectItem>
-                  )}
-                  <SelectItem value="Others">Others</SelectItem>
-                </SelectContent>
-              </Select>
+                return (
+                  <div key={title} className="space-y-3 rounded-lg border p-3">
+                    <p className="text-sm font-medium break-words">{title}</p>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="space-y-1.5">
+                        <Label htmlFor={startId}>Course Start Date *</Label>
+                        <Input
+                          id={startId}
+                          type="date"
+                          value={details.courseStartDate}
+                          onChange={(event) => setDetailsByTitle((current) => ({
+                            ...current,
+                            [title]: {
+                              ...EMPTY_CERTIFICATE_DETAILS,
+                              ...current[title],
+                              courseStartDate: event.target.value,
+                            },
+                          }))}
+                          required
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor={endId}>Course End Date *</Label>
+                        <Input
+                          id={endId}
+                          type="date"
+                          value={details.courseEndDate}
+                          onChange={(event) => setDetailsByTitle((current) => ({
+                            ...current,
+                            [title]: {
+                              ...EMPTY_CERTIFICATE_DETAILS,
+                              ...current[title],
+                              courseEndDate: event.target.value,
+                            },
+                          }))}
+                          required
+                        />
+                      </div>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor={divisionId}>Division *</Label>
+                      <Select
+                        value={isStandardDivision ? details.division : details.division ? CUSTOM_DIVISION_OPTION : ""}
+                        onValueChange={(value) => handleDivisionChange(title, value)}
+                      >
+                        <SelectTrigger id={divisionId}>
+                          <SelectValue placeholder="Select division" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {DIVISION_OPTIONS.map((option) => (
+                            <SelectItem key={option} value={option}>{option}</SelectItem>
+                          ))}
+                          {!isStandardDivision && details.division && (
+                            <SelectItem value={CUSTOM_DIVISION_OPTION}>{details.division}</SelectItem>
+                          )}
+                          <SelectItem value="Others">Others</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                )
+              })}
             </div>
           </div>
 
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setIssueOpen(false)}>
+          <SheetFooter>
+            <Button type="button" variant="outline" onClick={() => setIssueOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={handleIssueCertificate} disabled={issuing || !selectedStudent}>
+            <Button type="button" onClick={handleIssueCertificate} disabled={issuing || !selectedStudent || selectedCertificateTitles.length === 0}>
               {issuing ? (
                 <>
                   <Loader2 className="size-4 animate-spin" />
@@ -694,20 +858,20 @@ export default function AdminCertificatesPage() {
               ) : (
                 <>
                   <Award className="size-4" />
-                  Issue Certificate
+                  Issue {selectedCertificateTitles.length || ""} Certificate{selectedCertificateTitles.length === 1 ? "" : "s"}
                 </>
               )}
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          </SheetFooter>
+        </SheetContent>
+      </Sheet>
 
       <Dialog open={divisionDialogOpen} onOpenChange={setDivisionDialogOpen}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Enter certificate division</DialogTitle>
             <DialogDescription>
-              Enter the division to appear on this certificate.
+              Enter the division to appear on “{customDivisionTitle}”.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
@@ -739,14 +903,14 @@ export default function AdminCertificatesPage() {
       </Dialog>
 
       <Sheet open={studentPickerOpen} onOpenChange={setStudentPickerOpen}>
-        <SheetContent side="left" className="w-full max-w-md border-r bg-background px-0 pb-0 pt-0 text-foreground sm:max-w-md">
-          <SheetHeader className="border-b bg-background px-4 pb-3 pt-4">
+        <SheetContent side="left" className="w-full max-w-md gap-0 overflow-hidden border-r bg-background px-0 pb-0 pt-0 text-foreground sm:max-w-md">
+          <SheetHeader className="shrink-0 border-b bg-background px-4 pb-3 pt-4">
             <SheetTitle>Select Student & Course</SheetTitle>
             <SheetDescription>Search and choose a completed course certificate to issue.</SheetDescription>
           </SheetHeader>
 
-          <div className="flex h-full flex-col px-4 pb-4 pt-3">
-            <div className="sticky top-0 z-10 bg-background pb-3">
+          <div className="flex min-h-0 flex-1 flex-col px-4 pb-4 pt-3">
+            <div className="z-10 shrink-0 bg-background pb-3">
               <Input
                 placeholder="Search students or courses..."
                 value={studentSearch}
@@ -754,7 +918,7 @@ export default function AdminCertificatesPage() {
               />
             </div>
 
-            <div className="flex-1 space-y-2 overflow-y-auto pr-1 [scrollbar-color:rgba(148,163,184,0.65)_transparent] [-ms-overflow-style:none] [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-300 [&::-webkit-scrollbar-track]:bg-transparent dark:[&::-webkit-scrollbar-thumb]:bg-slate-700">
+            <div className="h-0 min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain pr-2 scroll-smooth [-webkit-overflow-scrolling:touch] [scrollbar-color:rgb(148_163_184)_rgb(241_245_249)] [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-400 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-slate-100 dark:[scrollbar-color:rgb(71_85_105)_rgb(30_41_59)] dark:[&::-webkit-scrollbar-thumb]:bg-slate-600 dark:[&::-webkit-scrollbar-track]:bg-slate-800">
               {students
                 .filter((student) => {
                   const query = studentSearch.trim().toLowerCase()
@@ -774,6 +938,8 @@ export default function AdminCertificatesPage() {
                     )}
                     onClick={() => {
                       setSelectedStudent(student.id)
+                      setSelectedCertificateTitles(student.certificateTitles)
+                      setDetailsByTitle({})
                       setStudentPickerOpen(false)
                       setStudentSearch("")
                     }}
@@ -782,7 +948,9 @@ export default function AdminCertificatesPage() {
                       <p className="truncate font-medium">{student.full_name}</p>
                       <p className="truncate text-xs text-muted-foreground">{student.courseName}</p>
                     </div>
-                    <span className="shrink-0 text-xs text-muted-foreground">Select</span>
+                    <span className="shrink-0 text-xs text-muted-foreground">
+                      {student.certificateTitles.length} certificate{student.certificateTitles.length === 1 ? "" : "s"}
+                    </span>
                   </button>
                 ))}
 
@@ -801,7 +969,7 @@ export default function AdminCertificatesPage() {
             </div>
           </div>
 
-          <SheetFooter className="border-t px-4 py-3">
+          <SheetFooter className="mt-0 shrink-0 border-t px-4 py-3">
             <Button variant="outline" className="w-full" onClick={() => setStudentPickerOpen(false)}>
               Close
             </Button>

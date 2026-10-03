@@ -1,13 +1,18 @@
 "use client"
 
 import { useState, useEffect } from "react"
+import Link from "next/link"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Award, Printer, Loader2, XCircle, AlertTriangle } from "lucide-react"
+import { Button, buttonVariants } from "@/components/ui/button"
+import { Award, Printer, Loader2, XCircle, AlertTriangle, Send } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { supabase } from "@/lib/supabase"
-import { printCertificate } from "@/lib/certificate-print"
+import {
+  CERTIFICATE_HEADING,
+  getCertificateCourseName,
+  printCertificate,
+} from "@/lib/certificate-print"
 import { useToast } from "@/components/ui/sonner"
 import { useStudent } from "../layout"
 
@@ -121,9 +126,10 @@ export default function StudentCertificatesPage() {
   const handlePrint = (cert: Certificate) => {
     const opened = printCertificate({
       studentName: student?.name ?? "",
-      course: cert.course,
+      course: getCertificateCourseName(cert.name, cert.course),
       type: cert.type,
       name: cert.name,
+      displayTitle: CERTIFICATE_HEADING,
       credentialId: cert.credentialId,
       issuedDate: cert.issuedDate,
       guardianName: cert.guardianName,
@@ -139,6 +145,16 @@ export default function StudentCertificatesPage() {
 
   return (
     <div className="space-y-4">
+      <div className="flex justify-end">
+        <Link
+          className={buttonVariants({ className: "gap-2" })}
+          href={`/admin/certificates?studentId=${encodeURIComponent(student?.id ?? "")}`}
+        >
+            <Send className="size-4" />
+            Issue Certificate
+        </Link>
+      </div>
+
       <div className="grid grid-cols-1 gap-3 min-[420px]:grid-cols-3 sm:gap-4">
         <Card>
           <CardContent className="p-3 sm:p-4 text-center">
@@ -170,7 +186,7 @@ export default function StudentCertificatesPage() {
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="mb-1 flex flex-wrap items-center gap-2">
-                    <p className="min-w-0 flex-1 break-words text-xs font-medium sm:text-sm">{cert.name}</p>
+                    <p className="min-w-0 flex-1 break-words text-xs font-medium sm:text-sm">{CERTIFICATE_HEADING}</p>
                     <Badge
                       variant="secondary"
                       className={cn(
@@ -181,7 +197,9 @@ export default function StudentCertificatesPage() {
                       {cert.status}
                     </Badge>
                   </div>
-                  <p className="mb-1 break-words text-[11px] text-muted-foreground">{cert.course} · {cert.issuedBy}</p>
+                  <p className="mb-1 break-words text-[11px] text-muted-foreground">
+                    {getCertificateCourseName(cert.name, cert.course)} · {cert.issuedBy}
+                  </p>
                   {cert.status === "Issued" && (
                     <p className="break-all font-mono text-[10px] text-muted-foreground">ID: {cert.credentialId} · Issued: {cert.issuedDate}</p>
                   )}

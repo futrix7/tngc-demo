@@ -11,7 +11,12 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ArrowLeft, Award, Printer, CheckCircle2, Clock, Eye, Send, Loader2, XCircle, Hourglass } from "lucide-react"
 import { useToast } from "@/components/ui/sonner"
 import { supabase } from "@/lib/supabase"
-import { createCertificateHtml, printCertificate } from "@/lib/certificate-print"
+import {
+  CERTIFICATE_HEADING,
+  createCertificateHtml,
+  getCertificateCourseName,
+  printCertificate,
+} from "@/lib/certificate-print"
 import { mintId } from "@/lib/mint-id"
 import { QueryError } from "@/components/student/data-state"
 
@@ -216,9 +221,10 @@ export default function StudentCertificates() {
   const handlePrint = (cert: Certificate) => {
     const opened = printCertificate({
       studentName,
-      course: cert.course,
+      course: getCertificateCourseName(cert.name, cert.course),
       type: cert.type,
       name: cert.name,
+      displayTitle: CERTIFICATE_HEADING,
       credentialId: cert.credentialId,
       issuedDate: cert.issuedDate,
       guardianName: cert.guardianName,
@@ -447,13 +453,15 @@ export default function StudentCertificates() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
-                      <p className="text-xs sm:text-sm font-medium truncate">{cert.name}</p>
+                      <p className="text-xs sm:text-sm font-medium truncate">{CERTIFICATE_HEADING}</p>
                       <Badge variant="secondary" className={`text-[10px] shrink-0 gap-1 ${cfg.className}`}>
                         <Icon className="size-2.5" />
                         {cert.status}
                       </Badge>
                     </div>
-                    <p className="text-[11px] text-muted-foreground mb-1">{cert.course} &middot; {cert.issuedBy}</p>
+                    <p className="text-[11px] text-muted-foreground mb-1">
+                      {getCertificateCourseName(cert.name, cert.course)} · {cert.issuedBy}
+                    </p>
                     {cert.status === "Issued" && (
                       <p className="text-[10px] text-muted-foreground font-mono">ID: {cert.credentialId} &middot; {cert.issuedDate}</p>
                     )}
@@ -493,9 +501,10 @@ export default function StudentCertificates() {
                 srcDoc={createCertificateHtml({
                   studentName,
                   guardianName: viewCert.guardianName,
-                  course: viewCert.course,
+                  course: getCertificateCourseName(viewCert.name, viewCert.course),
                   type: viewCert.type,
                   name: viewCert.name,
+                  displayTitle: CERTIFICATE_HEADING,
                   credentialId: viewCert.credentialId,
                   issuedDate: viewCert.issuedDate,
                   courseStartDate: viewCert.courseStartDate,

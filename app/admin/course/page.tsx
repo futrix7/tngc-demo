@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Plus, Clock, Star, Edit, Trash2, Award, Loader2 } from "lucide-react";
+import { Plus, Clock, Star, Edit, Trash2, Loader2 } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -31,12 +31,12 @@ type CourseType = {
   students: number;
   category: "long-term" | "short-term";
   popular?: boolean;
-  rating?: number;
   nextBatch?: string;
   status?: "active" | "upcoming" | "full";
   eligibility: string;
   description: string;
   topics: string[];
+  certifications: string[];
 };
 
 const filterTabs = [
@@ -156,12 +156,14 @@ export default function AdminCoursesPage() {
       students: studentsByCourse[c.slug]?.size ?? 0,
       category: c.type,
       popular: c.popular ?? false,
-      rating: c.rating ?? null,
       nextBatch: c.next_batch ?? null,
       status: c.status ?? "active",
       eligibility: c.eligibility ?? "",
       description: c.description ?? "",
       topics: c.topics ?? [],
+      certifications: Array.isArray(c.certifications) && c.certifications.length
+        ? c.certifications
+        : [c.certification || "Course Completion Certificate"],
     }));
 
     setCourses(mapped);
@@ -323,14 +325,6 @@ export default function AdminCoursesPage() {
                 <div className="rounded-lg bg-muted/50 p-2">
                   <p className="text-muted-foreground">Enrolled students</p>
                   <p className="font-semibold text-sm">{course.students}</p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-1.5 text-xs">
-                <div className="flex items-center gap-1.5">
-                  <Award className="h-3.5 w-3.5 text-amber-500" />
-                  <span className="font-medium">{course.rating ?? "—"}</span>
-                  <span className="text-muted-foreground">/ 5</span>
                 </div>
               </div>
 

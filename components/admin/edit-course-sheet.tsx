@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { BookOpen } from "lucide-react"
+import { BookOpen, Plus, Trash2 } from "lucide-react"
 import {
   FormSheet,
   FormField,
@@ -11,6 +11,7 @@ import {
   SHEET_TEXTAREA_CLASS,
 } from "@/components/admin/form-sheet"
 import { Input } from "@/components/ui/input"
+import { Button } from "@/components/ui/button"
 import {
   Select,
   SelectTrigger,
@@ -31,6 +32,7 @@ interface CourseData {
   eligibility: string
   description: string
   topics: string[]
+  certifications: string[]
   status?: string
 }
 
@@ -51,7 +53,12 @@ export function EditCourseSheet({ open, onOpenChange, course, onSuccess }: EditC
   const [eligibility, setEligibility] = useState("")
   const [description, setDescription] = useState("")
   const [topics, setTopics] = useState("")
+  const [certifications, setCertifications] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
+
+  function updateCertification(index: number, value: string) {
+    setCertifications((current) => current.map((item, itemIndex) => itemIndex === index ? value : item))
+  }
 
   useEffect(() => {
     if (course) {
@@ -64,6 +71,10 @@ export function EditCourseSheet({ open, onOpenChange, course, onSuccess }: EditC
       setEligibility(course.eligibility)
       setDescription(course.description)
       setTopics(course.topics.join(", "))
+      const existingNames = course.certifications.length
+        ? [course.name, ...course.certifications.slice(1)]
+        : [course.name]
+      setCertifications(existingNames)
     }
   }, [course])
 
@@ -74,17 +85,22 @@ export function EditCourseSheet({ open, onOpenChange, course, onSuccess }: EditC
     }
 
     if (!course) return
+    const certificateTitles = certifications.map((item, index) =>
+      item.trim() || (index === 0 ? courseName.trim() : "")
+    )
+    if (certificateTitles.some((title) => !title)) {
+      toast("Enter a course name for every certificate", { variant: "destructive" })
+      return
+    }
+    if (new Set(certificateTitles.map((title) => title.toLowerCase())).size !== certificateTitles.length) {
+      toast("Certificate course names must be unique", { variant: "destructive" })
+      return
+    }
     setSaving(true)
-
-    const slug = courseName
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/(^-|-$)/g, "")
 
     const { error } = await supabase
       .from("courses")
       .update({
-        slug,
         name: courseName.trim(),
         short_name: shortName.trim(),
         duration: duration.trim(),
@@ -95,6 +111,8 @@ export function EditCourseSheet({ open, onOpenChange, course, onSuccess }: EditC
         fees: fee ? `₹${Number(fee).toLocaleString("en-IN")}` : "₹0",
         fee_numeric: fee ? (parseInt(fee) || 0) : 0,
         eligibility: eligibility || "Any",
+        certification: certificateTitles[0],
+        certifications: certificateTitles,
       })
       .eq("id", course.id)
 
@@ -122,6 +140,7 @@ export function EditCourseSheet({ open, onOpenChange, course, onSuccess }: EditC
       <div className="grid grid-cols-2 gap-3">
         <FormField label="Course Name" htmlFor="courseName">
           <Input id="courseName" className={SHEET_INPUT_CLASS} placeholder="Enter course name" value={courseName} onChange={(e) => setCourseName(e.target.value)} />
+          <p className="mt-1 text-xs text-muted-foreground">Renaming the course keeps its existing links and does not overwrite the editable certificate course names.</p>
         </FormField>
         <FormField label="Short Name" htmlFor="shortName">
           <Input id="shortName" className={SHEET_INPUT_CLASS} placeholder="Enter the short name" value={shortName} onChange={(e) => setShortName(e.target.value)} />
@@ -184,6 +203,46 @@ export function EditCourseSheet({ open, onOpenChange, course, onSuccess }: EditC
           onChange={(e) => setTopics(e.target.value)}
           className={SHEET_TEXTAREA_CLASS}
         />
+      </FormField>
+
+      <FormField label={`Certification of completion · ${certifications.length} certificate${certifications.length === 1 ? "" : "s"}`}>
+        <div className="space-y-2">
+          {certifications.map((certificate, index) => (
+            <div key={index} className="flex gap-2">
+              <Input
+                aria-label={`Course name on certificate ${index + 1}`}
+                placeholder={index === 0 ? courseName || "Course name" : "Enter course name"}
+                className={SHEET_INPUT_CLASS}
+                value={certificate || (index === 0 ? courseName : "")}
+                onChange={(event) => updateCertification(index, event.target.value)}
+                maxLength={100}
+              />
+              {certifications.length > 1 && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  aria-label={`Remove certificate title ${index + 1}`}
+                  onClick={() => setCertifications((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                >
+                  <Trash2 className="size-4" />
+                </Button>
+              )}
+            </div>
+          ))}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setCertifications((current) => [...current, ""])}
+          >
+            <Plus className="mr-2 size-4" />
+            Add Certificate
+          </Button>
+          <p className="text-xs text-muted-foreground">
+            The certificate heading stays “Certification of completion”. The names above are editable course names printed on each certificate.
+          </p>
+        </div>
       </FormField>
     </FormSheet>
   )

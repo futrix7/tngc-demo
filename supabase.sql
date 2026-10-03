@@ -171,6 +171,7 @@ CREATE TABLE IF NOT EXISTS courses (
   fee_numeric           INTEGER NOT NULL DEFAULT 0,
   eligibility           TEXT NOT NULL,
   certification         TEXT NOT NULL,
+  certifications        TEXT[] NOT NULL DEFAULT '{}'::TEXT[],
   certification_body    TEXT NOT NULL,
   popular               BOOLEAN DEFAULT FALSE,
   highlights            TEXT[] DEFAULT '{}',
@@ -185,6 +186,27 @@ CREATE TABLE IF NOT EXISTS courses (
   created_at            TIMESTAMPTZ DEFAULT NOW(),
   updated_at            TIMESTAMPTZ DEFAULT NOW()
 );
+
+ALTER TABLE courses
+  ADD COLUMN IF NOT EXISTS certifications TEXT[] NOT NULL DEFAULT '{}'::TEXT[];
+
+ALTER TABLE courses
+  ALTER COLUMN certifications SET DEFAULT '{}'::TEXT[];
+
+UPDATE courses
+SET certification = name,
+    certifications = ARRAY[name]
+WHERE certifications IS NULL
+   OR cardinality(certifications) = 0
+   OR (
+     certifications = ARRAY['Course Completion Certificate']::TEXT[]
+     AND certification = 'Course Completion Certificate'
+   );
+
+UPDATE courses
+SET certifications = ARRAY[certification]
+WHERE certifications = ARRAY['Course Completion Certificate']::TEXT[]
+  AND certification <> 'Course Completion Certificate';
 
 CREATE TABLE IF NOT EXISTS students (
   id                      TEXT PRIMARY KEY,

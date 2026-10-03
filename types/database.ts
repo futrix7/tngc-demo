@@ -59,6 +59,7 @@ export interface Database {
           fee_numeric: number
           eligibility: string
           certification: string
+          certifications: string[]
           certification_body: string
           popular: boolean
           highlights: string[]
@@ -87,6 +88,7 @@ export interface Database {
           fee_numeric?: number
           eligibility: string
           certification: string
+          certifications?: string[]
           certification_body: string
           popular?: boolean
           highlights?: string[]
@@ -115,6 +117,7 @@ export interface Database {
           fee_numeric?: number
           eligibility?: string
           certification?: string
+          certifications?: string[]
           certification_body?: string
           popular?: boolean
           highlights?: string[]

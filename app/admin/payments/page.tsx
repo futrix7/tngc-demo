@@ -49,6 +49,7 @@ interface Payment {
   course: string
   amount: string
   amountRaw: number
+  remainingBalance: number | null
   date: string
   method: string
   status: PaymentStatus
@@ -108,7 +109,7 @@ export default function PaymentsPage() {
     const safeTerm = search.trim().slice(0, 80).replace(/[^\p{L}\p{N}\s@._+-]/gu, "")
     let query = supabase
       .from("payments")
-      .select("id, student_name, course_slug, amount, payment_date, method, status, description", { count: "exact" })
+      .select("id, student_name, course_slug, amount, payment_date, method, status, description, installment_id", { count: "exact" })
       .order("payment_date", { ascending: false })
     if (selectedFilters.status !== "all") query = query.eq("status", selectedFilters.status)
     if (selectedFilters.from) query = query.gte("payment_date", selectedFilters.from)
@@ -124,21 +125,51 @@ export default function PaymentsPage() {
     if (activeRequest !== requestId.current) return true
 
     const slugs = [...new Set((paymentsData ?? []).map((payment) => payment.course_slug).filter(Boolean))] as string[]
-    const { data: coursesData } = slugs.length
-      ? await supabase.from("courses").select("slug, name").in("slug", slugs)
-      : { data: [] as { slug: string; name: string }[] }
-    const courseMap = new Map((coursesData ?? []).map((course) => [course.slug, course.name]))
-    setPayments((paymentsData ?? []).map((payment) => ({
+    const installmentIds = [
+      ...new Set((paymentsData ?? []).map((payment) => payment.installment_id).filter(Boolean)),
+    ] as string[]
+    const [coursesResult, installmentsResult] = await Promise.all([
+      slugs.length
+        ? supabase.from("courses").select("slug, name").in("slug", slugs)
+        : Promise.resolve({ data: [] as { slug: string; name: string }[], error: null }),
+      installmentIds.length
+        ? supabase.from("fee_installments").select("id, fee_id").in("id", installmentIds)
+        : Promise.resolve({ data: [] as { id: string; fee_id: string }[], error: null }),
+    ])
+    if (coursesResult.error || installmentsResult.error) {
+      console.error("Error fetching payment details:", coursesResult.error ?? installmentsResult.error)
+      if (activeRequest === requestId.current) setLoading(false)
+      return false
+    }
+
+    const feeIds = [...new Set((installmentsResult.data ?? []).map((row) => row.fee_id).filter(Boolean))]
+    const { data: feeRows, error: feesError } = feeIds.length
+      ? await supabase.from("fees").select("id, pending_amount").in("id", feeIds)
+      : { data: [] as { id: string; pending_amount: number | null }[], error: null }
+    if (feesError) {
+      console.error("Error fetching payment balances:", feesError.message)
+      if (activeRequest === requestId.current) setLoading(false)
+      return false
+    }
+
+    const courseMap = new Map((coursesResult.data ?? []).map((course) => [course.slug, course.name]))
+    const feeByInstallment = new Map((installmentsResult.data ?? []).map((row) => [row.id, row.fee_id]))
+    const balanceByFee = new Map((feeRows ?? []).map((fee) => [fee.id, Number(fee.pending_amount ?? 0)]))
+    setPayments((paymentsData ?? []).map((payment) => {
+      const feeId = payment.installment_id ? feeByInstallment.get(payment.installment_id) : undefined
+      return {
       id: payment.id,
       studentName: payment.student_name,
       course: payment.course_slug ? courseMap.get(payment.course_slug) ?? payment.course_slug : "N/A",
       amount: `₹${Number(payment.amount).toLocaleString("en-IN")}`,
       amountRaw: Number(payment.amount),
+      remainingBalance: feeId ? balanceByFee.get(feeId) ?? null : null,
       date: new Date(payment.payment_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }),
       method: payment.method,
       status: payment.status as PaymentStatus,
       reference: payment.description ?? "",
-    })))
+      }
+    }))
     setTotalCount(count ?? 0)
     setLoading(false)
     return true
@@ -362,7 +393,16 @@ export default function PaymentsPage() {
                     </TableCell>
                     <TableCell className="font-medium">{payment.studentName}</TableCell>
                     <TableCell className="text-muted-foreground">{payment.course}</TableCell>
-                    <TableCell className="text-right font-medium">{payment.amount}</TableCell>
+                    <TableCell className="text-right">
+                      <span className="font-medium">{payment.amount}</span>
+                      {payment.remainingBalance !== null && payment.status === "Paid" && (
+                        <span className="block whitespace-nowrap text-xs font-normal text-muted-foreground">
+                          {payment.remainingBalance > 0
+                            ? `₹${payment.remainingBalance.toLocaleString("en-IN")} remaining`
+                            : "Paid in full"}
+                        </span>
+                      )}
+                    </TableCell>
                     <TableCell className="text-muted-foreground">{payment.date}</TableCell>
                     <TableCell className="capitalize">{payment.method}</TableCell>
                     <TableCell>
