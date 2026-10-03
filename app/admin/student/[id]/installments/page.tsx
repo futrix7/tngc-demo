@@ -91,6 +91,10 @@ export default function StudentInstallmentsPage() {
   const [reviewingId, setReviewingId] = useState<string | null>(null)
   const [unmarkingId, setUnmarkingId] = useState<string | null>(null)
   const [addInstallmentOpen, setAddInstallmentOpen] = useState(false)
+  const [installmentDialogMode, setInstallmentDialogMode] = useState<"add" | "collect-all">("add")
+  const [collectAllMethod, setCollectAllMethod] = useState("cash")
+  const [collectAllReference, setCollectAllReference] = useState("")
+  const [collectingAll, setCollectingAll] = useState(false)
   const [sourceInstallmentId, setSourceInstallmentId] = useState("")
   const [newInstallmentLabel, setNewInstallmentLabel] = useState("Additional installment")
   const [newInstallmentAmount, setNewInstallmentAmount] = useState("")
@@ -344,6 +348,12 @@ export default function StudentInstallmentsPage() {
   const paid = installments.filter((i) => i.balance === 0)
   const awaiting = installments.filter((i) => i.pendingPaymentIds.length > 0)
   const pendingAmount = totalFee - collected
+  const collectAllAmount = Number(
+    installments.reduce((sum, installment) => sum + installment.availableToSplit, 0).toFixed(2)
+  )
+  const hasFractionalCollectibleBalance = open.some(
+    (installment) => installment.availableToSplit > 0 && !Number.isInteger(installment.availableToSplit)
+  )
 
   const grouped = open.reduce<Record<string, Installment[]>>((acc, inst) => {
     ;(acc[inst.course] ??= []).push(inst)
@@ -365,6 +375,7 @@ export default function StudentInstallmentsPage() {
   function openAddInstallment() {
     const firstSource = splitSources[0]
     if (!firstSource) return
+    setInstallmentDialogMode("add")
     setSourceInstallmentId(firstSource.id)
     setNewInstallmentLabel("Additional installment")
     setNewInstallmentAmount("")
@@ -413,6 +424,60 @@ export default function StudentInstallmentsPage() {
       toast("We couldn't add that installment. Nothing was changed.", { variant: "destructive" })
     } finally {
       setAddingInstallment(false)
+    }
+  }
+
+  async function handleCollectAll() {
+    if (!student || collectingAll || collectAllAmount <= 0) return
+    setCollectingAll(true)
+
+    try {
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
+      if (sessionError) throw sessionError
+      const token = sessionData.session?.access_token
+      if (!token) {
+        toast("Your admin session has expired. Please sign in again.", { variant: "destructive" })
+        return
+      }
+
+      const response = await fetch("/api/installments/collect-all", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          studentId: student.id,
+          method: collectAllMethod,
+          reference: collectAllReference.trim(),
+        }),
+      })
+      const result = (await response.json().catch(() => ({}))) as {
+        error?: string
+        amount?: number
+        count?: number
+      }
+
+      if (!response.ok) {
+        toast(result.error ?? "We couldn't collect the outstanding fees. Nothing was changed.", {
+          variant: "destructive",
+          duration: 10000,
+        })
+        return
+      }
+
+      toast(
+        `Collected ₹${Number(result.amount ?? collectAllAmount).toLocaleString("en-IN")} across ${result.count ?? 0} installment${result.count === 1 ? "" : "s"}.`,
+        { variant: "success" }
+      )
+      setAddInstallmentOpen(false)
+      setCollectAllReference("")
+      await fetchData()
+    } catch (error) {
+      console.error("[student installments] collect all failed:", error)
+      toast("We couldn't collect the outstanding fees. Nothing was changed — please try again.", {
+        variant: "destructive",
+        duration: 10000,
+      })
+    } finally {
+      setCollectingAll(false)
     }
   }
 
@@ -508,7 +573,7 @@ export default function StudentInstallmentsPage() {
         <CardContent className="p-4 sm:p-5">
           <div className="mb-3 flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
             <h3 className="text-sm font-semibold">Outstanding Installments</h3>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Badge variant="secondary" className="text-xs">{open.length}</Badge>
               <Button
                 variant="outline"
@@ -666,87 +731,177 @@ export default function StudentInstallmentsPage() {
         </Card>
       )}
 
-      <Dialog open={addInstallmentOpen} onOpenChange={setAddInstallmentOpen}>
-        <DialogContent className="sm:max-w-md">
+      <Dialog
+        open={addInstallmentOpen}
+        onOpenChange={(open) => {
+          if (!addingInstallment && !collectingAll) setAddInstallmentOpen(open)
+        }}
+      >
+        <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Add an installment</DialogTitle>
+            <DialogTitle>
+              {installmentDialogMode === "add" ? "Add an installment" : "Pay all outstanding"}
+            </DialogTitle>
             <DialogDescription>
-              Split part of an unpaid schedule line into a new due date. This does not change the course fee total;
-              verified payments and pending student claims stay assigned to the original line.
+              {installmentDialogMode === "add"
+                ? "Split part of an unpaid schedule line into a new due date. This does not change the course fee total; verified payments and pending student claims stay assigned to the original line."
+                : "Collect all currently payable balances across this student’s courses in one transaction. Claims awaiting review are excluded."}
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="splitSource">Split from</Label>
-              <Select value={sourceInstallmentId} onValueChange={(value) => setSourceInstallmentId(value ?? "")}>
-                <SelectTrigger id="splitSource">
-                  <SelectValue placeholder="Choose an outstanding installment" />
-                </SelectTrigger>
-                <SelectContent>
-                  {splitSources.map((inst) => (
-                    <SelectItem key={inst.id} value={inst.id}>
-                      {inst.course} · {inst.label} · available ₹{inst.availableToSplit.toLocaleString("en-IN")}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="newInstallmentLabel">New installment label</Label>
-              <Input
-                id="newInstallmentLabel"
-                maxLength={100}
-                value={newInstallmentLabel}
-                onChange={(event) => setNewInstallmentLabel(event.target.value)}
-                placeholder="e.g. Installment 4"
-              />
-            </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="newInstallmentAmount">Amount to split</Label>
-                <Input
-                  id="newInstallmentAmount"
-                  type="number"
-                  inputMode="decimal"
-                  min="0.01"
-                  step="0.01"
-                  max={selectedSplitSource ? selectedSplitSource.availableToSplit : undefined}
-                  value={newInstallmentAmount}
-                  onChange={(event) => setNewInstallmentAmount(event.target.value)}
-                  aria-invalid={Boolean(splitAmountError)}
-                />
-                {splitAmountError && <p className="text-xs text-destructive">{splitAmountError}</p>}
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="newInstallmentDueDate">New due date</Label>
-                <Input
-                  id="newInstallmentDueDate"
-                  type="date"
-                  value={newInstallmentDueDate}
-                  onChange={(event) => setNewInstallmentDueDate(event.target.value)}
-                  required
-                />
-              </div>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setAddInstallmentOpen(false)} disabled={addingInstallment}>
-              Cancel
+          <div className="grid grid-cols-2 gap-2 rounded-lg bg-muted p-1">
+            <Button
+              type="button"
+              size="sm"
+              variant={installmentDialogMode === "add" ? "secondary" : "ghost"}
+              onClick={() => setInstallmentDialogMode("add")}
+              disabled={collectingAll || addingInstallment}
+            >
+              Add installment
             </Button>
             <Button
-              onClick={() => void handleAddInstallment()}
-              disabled={
-                addingInstallment
-                || !selectedSplitSource
-                || !newInstallmentLabel.trim()
-                || !newInstallmentDueDate
-                || Boolean(splitAmountError)
-              }
+              type="button"
+              size="sm"
+              variant={installmentDialogMode === "collect-all" ? "secondary" : "ghost"}
+              onClick={() => setInstallmentDialogMode("collect-all")}
+              disabled={collectingAll || addingInstallment || collectAllAmount <= 0}
             >
-              {addingInstallment ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Plus className="mr-2 size-4" />}
-              {addingInstallment ? "Adding..." : "Add installment"}
+              <Banknote className="size-4" />
+              Pay all outstanding
             </Button>
-          </DialogFooter>
+          </div>
+
+          {installmentDialogMode === "add" ? (
+            <>
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="splitSource">Split from</Label>
+                  <Select value={sourceInstallmentId} onValueChange={(value) => setSourceInstallmentId(value ?? "")}>
+                    <SelectTrigger id="splitSource">
+                      <SelectValue placeholder="Choose an outstanding installment" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {splitSources.map((inst) => (
+                        <SelectItem key={inst.id} value={inst.id}>
+                          {inst.course} · {inst.label} · available ₹{inst.availableToSplit.toLocaleString("en-IN")}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="newInstallmentLabel">New installment label</Label>
+                  <Input
+                    id="newInstallmentLabel"
+                    maxLength={100}
+                    value={newInstallmentLabel}
+                    onChange={(event) => setNewInstallmentLabel(event.target.value)}
+                    placeholder="e.g. Installment 4"
+                  />
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="newInstallmentAmount">Amount to split</Label>
+                    <Input
+                      id="newInstallmentAmount"
+                      type="number"
+                      inputMode="decimal"
+                      min="0.01"
+                      step="0.01"
+                      max={selectedSplitSource ? selectedSplitSource.availableToSplit : undefined}
+                      value={newInstallmentAmount}
+                      onChange={(event) => setNewInstallmentAmount(event.target.value)}
+                      aria-invalid={Boolean(splitAmountError)}
+                    />
+                    {splitAmountError && <p className="text-xs text-destructive">{splitAmountError}</p>}
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="newInstallmentDueDate">New due date</Label>
+                    <Input
+                      id="newInstallmentDueDate"
+                      type="date"
+                      value={newInstallmentDueDate}
+                      onChange={(event) => setNewInstallmentDueDate(event.target.value)}
+                      required
+                    />
+                  </div>
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setAddInstallmentOpen(false)} disabled={addingInstallment}>
+                  Cancel
+                </Button>
+                <Button
+                  onClick={() => void handleAddInstallment()}
+                  disabled={
+                    addingInstallment
+                    || !selectedSplitSource
+                    || !newInstallmentLabel.trim()
+                    || !newInstallmentDueDate
+                    || Boolean(splitAmountError)
+                  }
+                >
+                  {addingInstallment ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Plus className="mr-2 size-4" />}
+                  {addingInstallment ? "Adding..." : "Add installment"}
+                </Button>
+              </DialogFooter>
+            </>
+          ) : (
+            <>
+              <div className="space-y-4">
+                <div className="rounded-lg border bg-muted/40 p-4">
+                  <p className="text-xs text-muted-foreground">Total to collect</p>
+                  <p className="mt-1 text-2xl font-bold">₹{collectAllAmount.toLocaleString("en-IN")}</p>
+                </div>
+                {hasFractionalCollectibleBalance && (
+                  <p className="text-sm text-destructive">
+                    One or more outstanding balances include paise. Payments must be whole rupees, so
+                    settle those balances individually after adjusting the schedule.
+                  </p>
+                )}
+                <div className="space-y-2">
+                  <Label htmlFor="collectAllMethod">Payment method</Label>
+                  <Select value={collectAllMethod} onValueChange={(value) => setCollectAllMethod(value ?? "cash")}>
+                    <SelectTrigger id="collectAllMethod">
+                      <SelectValue placeholder="Choose a payment method" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="cash">Cash</SelectItem>
+                      <SelectItem value="upi">UPI</SelectItem>
+                      <SelectItem value="bank">Bank</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="collectAllReference">Reference / note (optional)</Label>
+                  <Input
+                    id="collectAllReference"
+                    maxLength={200}
+                    value={collectAllReference}
+                    onChange={(event) => setCollectAllReference(event.target.value)}
+                    placeholder="Receipt or transaction reference"
+                  />
+                </div>
+              </div>
+              <DialogFooter>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setAddInstallmentOpen(false)}
+                  disabled={collectingAll}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  onClick={handleCollectAll}
+                  disabled={collectingAll || collectAllAmount <= 0 || hasFractionalCollectibleBalance}
+                >
+                  {collectingAll ? <Loader2 className="size-4 animate-spin" /> : <Banknote className="size-4" />}
+                  {collectingAll ? "Collecting..." : "Confirm collection"}
+                </Button>
+              </DialogFooter>
+            </>
+          )}
         </DialogContent>
       </Dialog>
     </div>

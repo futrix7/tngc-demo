@@ -1610,6 +1610,80 @@ COMMENT ON FUNCTION public.record_fee_payment_at(uuid, numeric, text, text, text
 
 REVOKE ALL ON FUNCTION public.record_fee_payment_at(uuid, numeric, text, text, text, text, text, date) FROM PUBLIC;
 
+CREATE OR REPLACE FUNCTION public.collect_all_student_fees(
+  p_student_id text,
+  p_method text,
+  p_description text,
+  p_verified_by text
+)
+RETURNS TABLE (payment_id text, fee_id uuid, installment_id uuid, installment_label text, amount numeric)
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_fee fees%ROWTYPE;
+  v_available numeric;
+  v_payment record;
+BEGIN
+  IF NULLIF(trim(COALESCE(p_student_id, '')), '') IS NULL THEN
+    RAISE EXCEPTION 'a student is required to collect outstanding fees' USING ERRCODE = '22023';
+  END IF;
+
+  IF COALESCE(p_method, '') NOT IN ('cash', 'upi', 'bank') THEN
+    RAISE EXCEPTION 'choose a valid payment method' USING ERRCODE = '22023';
+  END IF;
+
+  FOR v_fee IN
+    SELECT * FROM fees
+     WHERE student_id = p_student_id
+     ORDER BY created_at, id
+     FOR UPDATE
+  LOOP
+    SELECT COALESCE(SUM(
+             GREATEST(
+               fi.amount
+               - COALESCE((SELECT SUM(p.amount) FROM payments p
+                            WHERE p.installment_id = fi.id AND p.status = 'Paid'), 0)
+               - COALESCE((SELECT SUM(p.amount) FROM payments p
+                            WHERE p.installment_id = fi.id AND p.status = 'Pending'), 0),
+               0
+             )), 0)
+      INTO v_available
+      FROM fee_installments fi
+     WHERE fi.fee_id = v_fee.id;
+
+    CONTINUE WHEN v_available <= 0;
+
+    FOR v_payment IN
+      SELECT * FROM public.record_fee_payment_at(
+        v_fee.id,
+        v_available,
+        p_method,
+        COALESCE(NULLIF(trim(p_description), ''), 'Full outstanding balance collected'),
+        'Paid',
+        NULL,
+        p_verified_by,
+        CURRENT_DATE
+      )
+    LOOP
+      payment_id := v_payment.payment_id;
+      fee_id := v_fee.id;
+      installment_id := v_payment.installment_id;
+      installment_label := v_payment.installment_label;
+      amount := v_payment.amount;
+      RETURN NEXT;
+    END LOOP;
+  END LOOP;
+END;
+$$;
+
+COMMENT ON FUNCTION public.collect_all_student_fees(text, text, text, text) IS
+  'Collects every currently collectible balance across a student''s course fees atomically. Claims pending review are excluded; service_role only.';
+
+REVOKE ALL ON FUNCTION public.collect_all_student_fees(text, text, text, text) FROM PUBLIC;
+
 -- The seven-argument form every existing caller uses: today's date, no exceptions.
 -- Kept as its own signature rather than a defaulted argument on the function above,
 -- because adding an argument would break the named-argument calls the app already
@@ -1970,6 +2044,8 @@ GRANT EXECUTE ON FUNCTION public.record_fee_payment(uuid, numeric, text, text, t
   TO service_role;
 GRANT EXECUTE ON FUNCTION public.record_fee_payment_at(uuid, numeric, text, text, text, text, text, date)
   TO service_role;
+GRANT EXECUTE ON FUNCTION public.collect_all_student_fees(text, text, text, text)
+  TO service_role;
 GRANT EXECUTE ON FUNCTION public.submit_fee_payment(uuid, uuid, numeric, text, text)
   TO service_role;
 GRANT EXECUTE ON FUNCTION public.verify_installment_payments(text[], boolean, text, text)
@@ -1984,6 +2060,7 @@ ALTER FUNCTION public.add_student_fee_installment(text, uuid, uuid, numeric, tex
 ALTER FUNCTION public.apply_fee_delta(uuid, numeric, numeric)                     OWNER TO postgres;
 ALTER FUNCTION public.record_fee_payment(uuid, numeric, text, text, text, text, text) OWNER TO postgres;
 ALTER FUNCTION public.record_fee_payment_at(uuid, numeric, text, text, text, text, text, date) OWNER TO postgres;
+ALTER FUNCTION public.collect_all_student_fees(text, text, text, text) OWNER TO postgres;
 ALTER FUNCTION public.submit_fee_payment(uuid, uuid, numeric, text, text)         OWNER TO postgres;
 ALTER FUNCTION public.verify_installment_payments(text[], boolean, text, text)      OWNER TO postgres;
 ALTER FUNCTION public.mark_installment_paid(uuid, text, text)                      OWNER TO postgres;

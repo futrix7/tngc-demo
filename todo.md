@@ -1,2 +1,0 @@
-- Make this update when the admin add the amount paid from the couser dialog in the students dynamic route. donot show the "collect" btn in the installments of the students dynamic route.
-- Remove float in the payments please let it be int only.
