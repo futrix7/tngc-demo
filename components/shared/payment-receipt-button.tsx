@@ -1,11 +1,10 @@
 "use client"
 
 import { useState } from "react"
-import { Download, Loader2, Printer } from "lucide-react"
+import { Loader2, Printer } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useToast } from "@/components/ui/sonner"
 import {
-  downloadPaymentReceiptPdf,
   openPrintWindow,
   renderPaymentReceipt,
   type PaymentReceipt,
@@ -18,11 +17,11 @@ interface PaymentReceiptButtonProps {
 
 export function PaymentReceiptButton({ receipt, className }: PaymentReceiptButtonProps) {
   const { toast } = useToast()
-  const [busyAction, setBusyAction] = useState<"print" | "download" | null>(null)
+  const [isPrinting, setIsPrinting] = useState(false)
 
   function handlePrint() {
-    if (busyAction) return
-    const win = openPrintWindow("Payment document")
+    if (isPrinting) return
+    const win = openPrintWindow("Fee Receipt")
     if (!win) {
       toast("Your browser blocked the print window. Allow pop-ups for this site and try again.", {
         variant: "destructive",
@@ -31,7 +30,7 @@ export function PaymentReceiptButton({ receipt, className }: PaymentReceiptButto
       return
     }
 
-    setBusyAction("print")
+    setIsPrinting(true)
     try {
       renderPaymentReceipt(win, receipt)
     } catch (error) {
@@ -39,21 +38,7 @@ export function PaymentReceiptButton({ receipt, className }: PaymentReceiptButto
       win.close()
       toast("We couldn't prepare this payment document. Please try again.", { variant: "destructive" })
     } finally {
-      setBusyAction(null)
-    }
-  }
-
-  async function handleDownload() {
-    if (busyAction) return
-    setBusyAction("download")
-
-    try {
-      await downloadPaymentReceiptPdf(receipt)
-    } catch (error) {
-      console.error("Unable to download the payment document:", error)
-      toast("We couldn't download this payment document. Please try again.", { variant: "destructive" })
-    } finally {
-      setBusyAction(null)
+      setIsPrinting(false)
     }
   }
 
@@ -63,23 +48,12 @@ export function PaymentReceiptButton({ receipt, className }: PaymentReceiptButto
         type="button"
         variant="ghost"
         size="icon-sm"
-        title={receipt.kind === "payment" ? "Print payment receipt" : "Print installment statement"}
-        aria-label={receipt.kind === "payment" ? "Print payment receipt" : "Print installment statement"}
+        title="Print fee receipt"
+        aria-label="Print fee receipt"
         onClick={handlePrint}
-        disabled={busyAction !== null}
+        disabled={isPrinting}
       >
-        {busyAction === "print" ? <Loader2 className="size-4 animate-spin" /> : <Printer className="size-4" />}
-      </Button>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        title="Download PDF"
-        aria-label="Download PDF"
-        onClick={handleDownload}
-        disabled={busyAction !== null}
-      >
-        {busyAction === "download" ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
+        {isPrinting ? <Loader2 className="size-4 animate-spin" /> : <Printer className="size-4" />}
       </Button>
     </div>
   )

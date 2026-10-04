@@ -365,55 +365,6 @@ export function buildPrintReportHtml(report: PrintReport): string {
 </html>`
 }
 
-function amountInWords(amount: number): string {
-  const whole = Math.floor(Math.abs(amount))
-  const paise = Math.round((Math.abs(amount) - whole) * 100)
-  const smallNumbers = [
-    "Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine",
-    "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen",
-    "Seventeen", "Eighteen", "Nineteen",
-  ]
-  const tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"]
-
-  function underThousand(value: number): string {
-    const parts: string[] = []
-    if (value >= 100) {
-      parts.push(`${smallNumbers[Math.floor(value / 100)]} Hundred`)
-      value %= 100
-    }
-    if (value >= 20) {
-      const unit = value % 10
-      parts.push(`${tens[Math.floor(value / 10)]}${unit ? ` ${smallNumbers[unit]}` : ""}`)
-    } else if (value > 0 || parts.length === 0) {
-      parts.push(smallNumbers[value])
-    }
-    return parts.join(" ")
-  }
-
-  function indianNumber(value: number): string {
-    if (value === 0) return "Zero"
-    const groups = [
-      { size: 10000000, label: "Crore" },
-      { size: 100000, label: "Lakh" },
-      { size: 1000, label: "Thousand" },
-      { size: 1, label: "" },
-    ]
-    let remaining = value
-    const parts: string[] = []
-    for (const group of groups) {
-      const count = Math.floor(remaining / group.size)
-      if (count > 0) {
-        parts.push(`${underThousand(count)}${group.label ? ` ${group.label}` : ""}`)
-        remaining %= group.size
-      }
-    }
-    return parts.join(" ")
-  }
-
-  const rupees = `${indianNumber(whole)} Rupees`
-  return paise ? `${rupees} and ${indianNumber(paise)} Paise Only` : `${rupees} Only`
-}
-
 function paymentDocumentNumber(receipt: PaymentReceipt): string {
   return receipt.kind === "payment"
     ? receipt.receiptSerial
@@ -424,168 +375,103 @@ function paymentDocumentNumber(receipt: PaymentReceipt): string {
       : receipt.documentNumber
 }
 
-export function getPaymentReceiptFileName(receipt: PaymentReceipt): string {
-  const title = receipt.kind === "payment"
-    ? receipt.status === "Paid" ? "PAYMENT RECEIPT" : "PAYMENT ACKNOWLEDGEMENT"
-    : "INSTALLMENT STATEMENT"
-  const receiptDate = receipt.kind === "payment" ? receipt.date : new Date().toISOString().slice(0, 10)
-  const fileDate = receiptDate.slice(0, 10).replace(/-/g, "")
-
-  return [
-    title,
-    receipt.studentName,
-    paymentDocumentNumber(receipt),
-    fileDate,
-  ]
-    .map((part) => part.replace(/[<>:"/\\|?*\u0000-\u001F]/g, "-").trim())
-    .filter(Boolean)
-    .join(" - ")
-}
-
-export async function downloadPaymentReceiptPdf(receipt: PaymentReceipt): Promise<void> {
-  const { default: html2pdf } = await import("html2pdf.js")
-  const frame = document.createElement("iframe")
-  frame.setAttribute("aria-hidden", "true")
-  frame.style.position = "fixed"
-  frame.style.left = "-10000px"
-  frame.style.top = "0"
-  frame.style.width = "210mm"
-  frame.style.height = "297mm"
-  frame.style.border = "0"
-
-  const loaded = new Promise<void>((resolve) => {
-    frame.addEventListener("load", () => resolve(), { once: true })
-  })
-  document.body.appendChild(frame)
-
-  try {
-    const frameDocument = frame.contentDocument
-    if (!frameDocument) throw new Error("Unable to access the receipt PDF document.")
-    frameDocument.open()
-    frameDocument.write(buildPaymentReceiptHtml(receipt, true))
-    frameDocument.close()
-    await loaded
-    await frameDocument.fonts.ready
-
-    const receiptElement = frameDocument.querySelector<HTMLElement>(".sheet")
-    if (!receiptElement) throw new Error("The receipt content is missing.")
-
-    await html2pdf()
-      .set({
-        filename: `${getPaymentReceiptFileName(receipt)}.pdf`,
-        margin: 0,
-        image: { type: "jpeg", quality: 0.98 },
-        html2canvas: {
-          scale: 2,
-          useCORS: true,
-          backgroundColor: "#ffffff",
-          onclone: (clonedDocument: Document) => {
-            clonedDocument.documentElement.style.color = "#172033"
-            clonedDocument.body.style.color = "#172033"
-          },
-        },
-        jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
-      })
-      .from(receiptElement)
-      .save()
-  } finally {
-    frame.remove()
-  }
-}
-
-export function buildPaymentReceiptHtml(receipt: PaymentReceipt, pdfExport = false): string {
-  const title = receipt.kind === "payment"
-    ? receipt.status === "Paid" ? "PAYMENT RECEIPT" : "PAYMENT ACKNOWLEDGEMENT"
-    : "INSTALLMENT STATEMENT"
+export function buildPaymentReceiptHtml(receipt: PaymentReceipt): string {
   const statusTone = receipt.status === "Paid" ? "paid" : receipt.status === "Rejected" ? "rejected" : "pending"
   const date = printDate(receipt.kind === "payment" ? receipt.date : new Date().toISOString().slice(0, 10))
-  const amount = receipt.kind === "payment" ? Number(receipt.transactionAmount ?? 0) : Number(receipt.feeAmount)
+  const totalPaid = Number(receipt.paidToDate)
   const safe = escapeHtml
   const details = [
     ["Student ID", receipt.studentId],
     ["Student", receipt.studentName],
     ["Phone", receipt.studentPhone || "—"],
     ["Course", receipt.course],
-    ...(receipt.installment ? [["Installment", receipt.installment]] : []),
-    ...(receipt.dueDate ? [["Due date", printDate(receipt.dueDate)]] : []),
+    ...(receipt.kind === "payment" && receipt.installment ? [["Payment for", receipt.installment]] : []),
   ]
   const detailsHtml = details.map(([label, value]) =>
     `<div class="detail"><span>${safe(label)}</span><strong>${safe(value)}</strong></div>`
   ).join("")
   const documentNumber = paymentDocumentNumber(receipt)
-  const suggestedFileName = getPaymentReceiptFileName(receipt)
   const transactionHtml = receipt.kind === "payment" ? `
     <section class="section">
-      <h2>Payment details</h2>
+      <h3>Payment details</h3>
       <div class="detail-grid">
         <div class="detail"><span>Payment date</span><strong>${safe(date)}</strong></div>
         <div class="detail"><span>Payment method</span><strong>${safe(receipt.method || "—")}</strong></div>
         <div class="detail"><span>Reference / note</span><strong>${safe(receipt.reference || "—")}</strong></div>
-        <div class="detail"><span>Verification</span><strong>${safe(receipt.verifiedAt ? printDate(receipt.verifiedAt) : receipt.status === "Paid" ? "Verified" : "Not verified")}</strong></div>
+        <div class="detail"><span>Verified on</span><strong>${safe(receipt.verifiedAt ? printDate(receipt.verifiedAt) : receipt.status === "Paid" ? "Verified" : "—")}</strong></div>
+        <div class="detail"><span>${receipt.status === "Paid" ? "Amount received" : "Amount submitted"}</span><strong>${safe(inr(receipt.transactionAmount ?? 0))}</strong></div>
       </div>
     </section>
   ` : ""
-  const paymentRow = receipt.kind === "payment" ? `
-    <div class="summary-row"><span>This transaction</span><strong>${safe(inr(amount))}</strong></div>
-    <div class="summary-row"><span>Verified payments to date</span><strong>${safe(inr(receipt.paidToDate))}</strong></div>
-  ` : `
-    <div class="summary-row"><span>Verified payments against installment</span><strong>${safe(inr(receipt.paidToDate))}</strong></div>
-    <div class="summary-row"><span>Payments awaiting verification</span><strong>${safe(inr(receipt.awaitingVerification))}</strong></div>
-    <div class="summary-row total"><span>Installment amount</span><strong>${safe(inr(receipt.feeAmount))}</strong></div>
-  `
-  const notice = receipt.status === "Paid"
-    ? "Payment verified and recorded by the institute."
+  const notice = receipt.kind === "installment"
+    ? "This receipt shows the total amount paid so far."
+    : receipt.status === "Paid"
+      ? "Payment verified and recorded by the institute."
     : receipt.status === "Rejected"
       ? "This payment was rejected or reversed and is not proof of payment received."
       : "This payment is awaiting institute verification. This acknowledgement is not confirmation that funds have been received."
 
   return `<!DOCTYPE html>
-<html lang="en"${pdfExport ? ' class="pdf-export"' : ""}>
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <title>${safe(suggestedFileName)}</title>
+  <title>Fee Receipt - ${safe(receipt.studentName)}</title>
   <style>
-    @page { size: A4 portrait; margin: 6mm; }
+    @page { size: auto; margin: 10mm; }
     * { box-sizing: border-box; }
     body { margin: 0; color: #172033; background: #fff; font: 12px/1.5 'Poppins', Arial, Helvetica, sans-serif; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .sheet { position: relative; display: flex; width: 100%; min-height: 269mm; flex-direction: column; max-width: 760px; margin: 0 auto; padding: 28px; border: 1px solid #dbe2ea; }
+    .sheet { position: relative; display: flex; width: 100%; flex-direction: column; max-width: 760px; margin: 0 auto; padding: 30px; border: 1px solid #cbd5e1; }
     .brand { display: flex; align-items: center; gap: 14px; padding-bottom: 18px; border-bottom: 2px solid #123b67; }
     .mark { display: grid; width: 56px; height: 48px; flex: 0 0 56px; place-items: center; border-radius: 10px; background: #123b67; color: white; font-size: 16px; font-weight: 700; letter-spacing: .04em; }
     .brand h1 { margin: 0; color: #123b67; font-size: 16px; letter-spacing: .045em; }
     .brand p { margin: 3px 0 0; color: #526174; font-size: 10px; }
-    .title-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin: 22px 0 16px; }
-    .title-row h2 { margin: 0; color: #123b67; font-size: 21px; letter-spacing: .04em; }
-    .title-row p { margin: 4px 0 0; color: #64748b; }
-    .status { display: inline-block; padding: 5px 9px; border: 1px solid; border-radius: 999px; font-size: 9px; font-weight: 700; letter-spacing: .07em; white-space: nowrap; }
+    .title-row { position: relative; display: flex; justify-content: center; align-items: center; margin: 20px 0 16px; padding-bottom: 12px; border-bottom: 1px solid #cbd5e1; text-align: center; }
+    .title-row h2 { margin: 0; color: #123b67; font-size: 21px; letter-spacing: .06em; text-transform: uppercase; }
+    .status { position: absolute; right: 0; top: 50%; transform: translateY(-50%); display: inline-block; padding: 5px 9px; border: 1px solid; border-radius: 3px; font-size: 9px; font-weight: 700; letter-spacing: .07em; white-space: nowrap; }
     .status.paid { border-color: #a7f3d0; color: #047857; background: #ecfdf5; }
     .status.pending { border-color: #fde68a; color: #a16207; background: #fffbeb; }
     .status.rejected { border-color: #fecaca; color: #b91c1c; background: #fef2f2; }
-    .ref-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 12px 14px; border-radius: 6px; background: #f3f6fa; }
+    .ref-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border: 1px solid #cbd5e1; }
+    .ref-row > div { padding: 10px 14px; }
+    .ref-row > div + div { border-left: 1px solid #cbd5e1; }
     .ref-row span, .detail span { display: block; color: #64748b; font-size: 9px; font-weight: 600; letter-spacing: .055em; text-transform: uppercase; }
     .ref-row strong, .detail strong { display: block; margin-top: 3px; overflow-wrap: anywhere; font-size: 11px; }
-    .section { margin-top: 19px; }
-    .section h3 { margin: 0 0 8px; padding-bottom: 5px; border-bottom: 1px solid #dbe2ea; color: #123b67; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
-    .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 22px; }
-    .summary { margin-top: 18px; padding: 14px 16px; border: 1px solid #dbe2ea; border-radius: 6px; }
-    .summary-row { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; }
-    .summary-row span { color: #526174; }
-    .summary-row strong { text-align: right; }
-    .summary-row.total { margin-top: 5px; padding-top: 10px; border-top: 1px solid #dbe2ea; color: #123b67; font-size: 14px; font-weight: 700; }
-    .amount-words { margin-top: 10px; padding-top: 9px; border-top: 1px dashed #cbd5e1; color: #526174; font-size: 10px; }
-    .notice { margin-top: 18px; padding: 10px 12px; border-left: 3px solid ${statusTone === "paid" ? "#059669" : statusTone === "rejected" ? "#dc2626" : "#d97706"}; background: #f8fafc; color: #475569; font-size: 10px; }
-    footer { display: flex; justify-content: space-between; gap: 12px; margin-top: auto; padding-top: 8px; border-top: 1px solid #dbe2ea; color: #64748b; font-size: 8px; }
+    .section { margin-top: 20px; }
+    .section h3 { margin: 0 0 0; padding: 8px 10px; border: 1px solid #cbd5e1; border-bottom: 0; background: #f1f5f9; color: #123b67; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+    .detail-grid { display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid #cbd5e1; border-left: 1px solid #cbd5e1; }
+    .detail { min-height: 54px; padding: 9px 10px; border-right: 1px solid #cbd5e1; border-bottom: 1px solid #cbd5e1; }
+    .detail strong { font-size: 11px; }
+    .summary { display: flex; flex-direction: column; margin-top: 24px; border: 2px solid #123b67; }
+    .summary-item { padding: 10px 18px; }
+    .summary-item + .summary-item { border-top: 1px solid #9aabc0; }
+    .summary-item.total-paid { background: #f0f6fc; }
+    .summary span { display: block; color: #526174; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
+    .summary strong { display: block; margin-top: 4px; color: #123b67; font-size: 22px; font-weight: 700; white-space: nowrap; }
+    .summary-item.balance-due { padding-top: 7px; padding-bottom: 7px; }
+    .summary-item.balance-due span { font-size: 9px; }
+    .summary-item.balance-due strong { margin-top: 1px; font-size: 13px; font-weight: 500; }
+    .notice { margin-top: 15px; padding: 10px 12px; border: 1px solid #dbe2ea; border-left: 3px solid ${statusTone === "paid" ? "#059669" : statusTone === "rejected" ? "#dc2626" : "#d97706"}; color: #475569; font-size: 10px; }
+    footer { margin-top: 24px; padding: 14px 16px; border-top: 3px solid #123b67; background: #f1f5f9; color: #334155; text-align: center; }
+    footer strong { display: block; color: #123b67; font-size: 10px; letter-spacing: .07em; }
+    footer span { display: block; margin-top: 3px; font-size: 9px; }
     @media screen { body { padding: 24px; background: #eef2f6; } .sheet { background: #fff; box-shadow: 0 8px 30px #0f172a14; } }
-    .pdf-export body { padding: 0; background: #fff; }
-    .pdf-export .sheet { width: 198mm; max-width: 198mm; min-height: 285mm; margin: 0 auto; padding: 6mm; border: 0; box-shadow: none; }
     @media print {
-      body { min-height: 269mm; }
-      .sheet { width: 198mm; max-width: 198mm; min-height: 285mm; margin: 0 auto; padding: 6mm; border: 0; }
+      .sheet { width: 100%; max-width: none; margin: 0; padding: 0; border: 0; }
     }
-    @media (max-width: 520px) { .sheet { padding: 18px; } .title-row { flex-direction: column; } .detail-grid { gap: 10px; } }
+    @media (max-width: 520px) {
+      .sheet { padding: 18px; }
+      .brand { align-items: flex-start; }
+      .brand p { line-height: 1.4; }
+      .status { position: static; transform: none; margin-left: 8px; }
+      .title-row { flex-wrap: wrap; }
+      .detail-grid { grid-template-columns: 1fr; }
+      .ref-row { grid-template-columns: 1fr; }
+      .ref-row > div + div { border-top: 1px solid #cbd5e1; border-left: 0; }
+    }
   </style>
 </head>
 <body>
@@ -595,23 +481,21 @@ export function buildPaymentReceiptHtml(receipt: PaymentReceipt, pdfExport = fal
       <div><h1>${safe(INSTITUTE_NAME)}</h1><p>${safe(INSTITUTE_ADDRESS)}</p></div>
     </header>
     <div class="title-row">
-      <div><h2>${safe(title)}</h2><p>${receipt.kind === "payment" ? "Official payment record" : "Fee schedule and balance statement"}</p></div>
+      <h2>Fee Receipt</h2>
       <span class="status ${statusTone}">${safe(receipt.status.toUpperCase())}</span>
     </div>
     <div class="ref-row">
-      <div><span>${receipt.kind === "payment" ? "Receipt / payment no." : "Statement no."}</span><strong>${safe(documentNumber)}</strong></div>
-      <div><span>${receipt.kind === "payment" ? "Payment date" : "Printed on"}</span><strong>${safe(date)}</strong></div>
+      <div><span>Receipt number</span><strong>${safe(documentNumber)}</strong></div>
+      <div><span>Date</span><strong>${safe(date)}</strong></div>
     </div>
     <section class="section"><h3>Student and course</h3><div class="detail-grid">${detailsHtml}</div></section>
     ${transactionHtml}
     <section class="summary">
-      ${paymentRow}
-      <div class="summary-row"><span>Amount awaiting verification</span><strong>${safe(inr(receipt.awaitingVerification))}</strong></div>
-      <div class="summary-row total"><span>Balance due</span><strong>${safe(inr(receipt.balanceDue))}</strong></div>
-      ${receipt.kind === "payment" ? `<div class="amount-words">Transaction amount in words: <strong>${safe(amountInWords(amount))}</strong></div>` : ""}
+      <div class="summary-item balance-due"><span>Balance Due</span><strong>${safe(inr(receipt.balanceDue))}</strong></div>
+      <div class="summary-item total-paid"><span>Total Amount Paid</span><strong>${safe(inr(totalPaid))}</strong></div>
     </section>
     <p class="notice">${safe(notice)}</p>
-    <footer><span>${safe(INSTITUTE_NAME)}</span><span>Computer-generated document · Please retain for your records</span></footer>
+    <footer><strong>${safe(INSTITUTE_NAME)}</strong><span>Thank you for your payment. Please keep this receipt for your records.</span></footer>
   </main>
 </body>
 </html>`
