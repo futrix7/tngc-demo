@@ -54,6 +54,7 @@ import {
 const DIVISION_OPTIONS = ["First", "Second", "Third"] as const
 const CUSTOM_DIVISION_OPTION = "__custom_division__"
 const EMPTY_CERTIFICATE_DETAILS: CertificateIssueDetails = {
+  issuedDate: localDate(),
   courseStartDate: "",
   courseEndDate: "",
   division: "",
@@ -81,6 +82,7 @@ interface StudentOption {
 }
 
 interface CertificateIssueDetails {
+  issuedDate: string
   courseStartDate: string
   courseEndDate: string
   division: string
@@ -108,7 +110,6 @@ export default function AdminCertificatesPage() {
   const [selectedCertificateTitles, setSelectedCertificateTitles] = useState<string[]>([])
   const [studentSearch, setStudentSearch] = useState("")
   const [certType, setCertType] = useState("Completion")
-  const [issuedDate, setIssuedDate] = useState(localDate)
   const [detailsByTitle, setDetailsByTitle] = useState<Record<string, CertificateIssueDetails>>({})
   const [customDivision, setCustomDivision] = useState("")
   const [customDivisionTitle, setCustomDivisionTitle] = useState("")
@@ -303,10 +304,6 @@ export default function AdminCertificatesPage() {
         !Number.isNaN(parsed.getTime()) &&
         parsed.toISOString().slice(0, 10) === value
     }
-    if (!validDate(issuedDate)) {
-      toast("Please enter a valid certificate issue date.", { variant: "destructive" })
-      return
-    }
     if (selectedCertificateTitles.length === 0) {
       toast("Please select at least one certificate title.", { variant: "destructive" })
       return
@@ -326,6 +323,10 @@ export default function AdminCertificatesPage() {
 
     for (const title of titlesToIssue) {
       const details = detailsByTitle[title] ?? EMPTY_CERTIFICATE_DETAILS
+      if (!validDate(details.issuedDate)) {
+        toast(`Enter a valid issue date for "${title}".`, { variant: "destructive" })
+        return
+      }
       if (!validDate(details.courseStartDate) || !validDate(details.courseEndDate)) {
         toast(`Enter valid course start and end dates for "${title}".`, { variant: "destructive" })
         return
@@ -371,7 +372,7 @@ export default function AdminCertificatesPage() {
           name: title,
           type: certType as "Completion" | "Proficiency" | "Module",
           credential_id: credentialId,
-          issued_date: issuedDate,
+          issued_date: details.issuedDate,
           guardian_name: student.guardianName || null,
           course_start_date: details.courseStartDate,
           course_end_date: details.courseEndDate,
@@ -426,7 +427,6 @@ export default function AdminCertificatesPage() {
     setSelectedStudent("")
     setSelectedCertificateTitles([])
     setCertType("Completion")
-    setIssuedDate(localDate())
     setDetailsByTitle({})
     setCustomDivision("")
     setCustomDivisionTitle("")
@@ -755,26 +755,16 @@ export default function AdminCertificatesPage() {
               </Select>
             </div>
 
-            <div className="space-y-1.5">
-              <Label htmlFor="certificateIssueDate">Certificate Issue Date *</Label>
-              <Input
-                id="certificateIssueDate"
-                type="date"
-                value={issuedDate}
-                onChange={(event) => setIssuedDate(event.target.value)}
-                required
-              />
-            </div>
-
             <div className="space-y-3">
               <div>
-                <Label>Course details for each certificate *</Label>
+                <Label>Details for each certificate *</Label>
                 <p className="text-xs text-muted-foreground">
-                  Set dates and division separately for each selected certificate. Issue date and type apply to all.
+                  Set the issue date, course dates, and division separately for each selected certificate. Type applies to all.
                 </p>
               </div>
               {selectedCertificateTitles.map((title, index) => {
                 const details = detailsByTitle[title] ?? EMPTY_CERTIFICATE_DETAILS
+                const issueId = `certificateIssueDate-${index}`
                 const startId = `certificateCourseStartDate-${index}`
                 const endId = `certificateCourseEndDate-${index}`
                 const divisionId = `certificateDivision-${index}`
@@ -783,6 +773,23 @@ export default function AdminCertificatesPage() {
                 return (
                   <div key={title} className="space-y-3 rounded-lg border p-3">
                     <p className="text-sm font-medium break-words">{title}</p>
+                    <div className="space-y-1.5">
+                      <Label htmlFor={issueId}>Certificate Issue Date *</Label>
+                      <Input
+                        id={issueId}
+                        type="date"
+                        value={details.issuedDate}
+                        onChange={(event) => setDetailsByTitle((current) => ({
+                          ...current,
+                          [title]: {
+                            ...EMPTY_CERTIFICATE_DETAILS,
+                            ...current[title],
+                            issuedDate: event.target.value,
+                          },
+                        }))}
+                        required
+                      />
+                    </div>
                     <div className="grid gap-3 sm:grid-cols-2">
                       <div className="space-y-1.5">
                         <Label htmlFor={startId}>Course Start Date *</Label>
