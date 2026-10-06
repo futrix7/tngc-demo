@@ -57,8 +57,8 @@ export function FilterDialog({ title, description, fields, values, onApply, onCl
     try {
       await onApply(draft)
       setOpen(false)
-    } catch {
-      setError("Filters could not be applied. Please try again.")
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Filters could not be applied. Please try again.")
     } finally {
       setBusy(null)
     }

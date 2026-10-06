@@ -11,6 +11,9 @@ import { isAwaitingVerification, isRejected, paymentStatusLabel } from "@/lib/pa
 import { useStudent } from "../layout"
 import { getInstallmentPaymentTotals, getRemainingInstallmentBalance } from "@/lib/payment-balances"
 import { PaymentReceiptButton } from "@/components/shared/payment-receipt-button"
+import { PrintButton } from "@/components/shared/print-button"
+import { buildStudentStatement } from "@/lib/fee-print"
+import type { PrintReport } from "@/lib/print-report"
 
 interface Payment {
   id: string
@@ -186,6 +189,54 @@ export default function StudentPaymentsPage() {
 
   const pendingFee = Math.max(0, totalFee - paidAmount - awaitingAmount)
 
+  /**
+   * This student's ledger as a printed sheet.
+   *
+   * Built from the rows already loaded rather than a second query, so the sheet
+   * cannot print figures that disagree with the table above the button. The
+   * schedule is derived per course from the same totals the receipts use, which
+   * is what makes the printed balance match `fees.pending_amount`.
+   */
+  function buildStatement(): PrintReport {
+    const byCourse = new Map<string, { total: number; paid: number; awaiting: number }>()
+    for (const payment of payments) {
+      const course = payment.course || "Fee"
+      const entry = byCourse.get(course) ?? { total: 0, paid: 0, awaiting: 0 }
+      entry.total = payment.feeAmount
+      if (payment.status === "Paid") entry.paid = payment.paidToDate
+      entry.awaiting = payment.awaitingVerification
+      byCourse.set(course, entry)
+    }
+
+    return buildStudentStatement({
+      title: "Payment Statement",
+      subtitle: "Payments received and balances outstanding",
+      studentName: student?.name ?? "Student",
+      studentId: student?.id ?? null,
+      installments: [...byCourse.entries()].map(([course, entry]) => ({
+        course,
+        label: `${course} fee`,
+        dueDate: payments.find((p) => p.course === course)?.date ?? "",
+        paidDate: entry.paid > 0 ? payments.find((p) => p.course === course)?.date ?? null : null,
+        amount: entry.total,
+        paidAmount: entry.paid,
+        awaitingAmount: entry.awaiting,
+        balance: Math.max(0, Number((entry.total - entry.paid - entry.awaiting).toFixed(2))),
+        status: entry.total - entry.paid - entry.awaiting <= 0 ? "Paid" : entry.paid > 0 ? "Partial" : "Pending",
+      })),
+      payments: payments.map((p) => ({
+        id: p.id,
+        course: p.course,
+        against: p.installment || p.for,
+        date: p.date,
+        amount: p.amount,
+        method: p.mode,
+        reference: p.for,
+        status: p.status,
+      })),
+    })
+  }
+
   return (
     <div className="space-y-4">
       {error && (
@@ -213,6 +264,13 @@ export default function StudentPaymentsPage() {
             <p className="text-xl sm:text-2xl font-bold text-amber-600">₹{awaitingAmount.toLocaleString()}</p>
           </CardContent>
         </Card>
+      </div>
+
+      <div className="flex justify-end">
+        <PrintButton
+          getReport={buildStatement}
+          title="Print this student's full payment statement"
+        />
       </div>
 
       <Card>

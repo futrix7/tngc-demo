@@ -3,13 +3,30 @@ import { authenticateAdminRequest, isSupabaseAdminConfigured, supabaseAdmin } fr
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 const DAILY_WINDOW = 14
+const TIME_ZONE = "Asia/Kolkata"
 
-function getLocalDateStr(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`
+function getDatePartsInIST(date: Date): { year: number; month: number; day: number } {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date)
+  const value = (type: string) => Number(parts.find((part) => part.type === type)?.value)
+  return { year: value("year"), month: value("month"), day: value("day") }
 }
 
-function getMonthKey(date: Date): string {
-  return `${date.getFullYear()}-${date.getMonth()}`
+function dateKey(year: number, month: number, day: number): string {
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`
+}
+
+function dateKeyInIST(date: Date): string {
+  const { year, month, day } = getDatePartsInIST(date)
+  return dateKey(year, month, day)
+}
+
+function getMonthKeyFromDateKey(value: string): string {
+  return value.slice(0, 7)
 }
 
 function dayOf(value: string | null | undefined): string {
@@ -24,14 +41,15 @@ function formatDate(dateStr: string | null): string {
     return `${String(day).padStart(2, "0")} ${MONTHS[month - 1]} ${year}`
   }
   const d = new Date(dateStr)
-  return `${String(d.getDate()).padStart(2, "0")} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`
+  const { year, month, day } = getDatePartsInIST(d)
+  return `${String(day).padStart(2, "0")} ${MONTHS[month - 1]} ${year}`
 }
 
 function formatTime(value: string | null | undefined): string {
   if (!value) return "—"
   const d = new Date(value)
   if (Number.isNaN(d.getTime())) return "—"
-  return d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })
+  return d.toLocaleTimeString("en-IN", { timeZone: TIME_ZONE, hour: "2-digit", minute: "2-digit" })
 }
 
 const STATUS_MAP: Record<string, string> = {
@@ -52,9 +70,9 @@ export async function GET(request: Request) {
 
   try {
     const now = new Date()
-    const todayStr = getLocalDateStr(now)
-    const thisMonth = now.getMonth()
-    const thisYear = now.getFullYear()
+    const todayStr = dateKeyInIST(now)
+    const [thisYear, thisMonthNumber] = todayStr.split("-").map(Number)
+    const thisMonth = thisMonthNumber - 1
 
     const [
       studentsRes,
@@ -121,23 +139,22 @@ export async function GET(request: Request) {
 
     const thisMonthCount = students.filter((s) => {
       if (!s.enrollment_date) return false
-      const d = new Date(s.enrollment_date)
-      return d.getMonth() === thisMonth && d.getFullYear() === thisYear
+      return getMonthKeyFromDateKey(dayOf(s.enrollment_date)) === `${thisYear}-${String(thisMonthNumber).padStart(2, "0")}`
     }).length
     const lastMonth = thisMonth === 0 ? 11 : thisMonth - 1
     const lastMonthYear = thisMonth === 0 ? thisYear - 1 : thisYear
     const lastMonthCount = students.filter((s) => {
       if (!s.enrollment_date) return false
-      const d = new Date(s.enrollment_date)
-      return d.getMonth() === lastMonth && d.getFullYear() === lastMonthYear
+      return getMonthKeyFromDateKey(dayOf(s.enrollment_date)) === `${lastMonthYear}-${String(lastMonth + 1).padStart(2, "0")}`
     }).length
     const growthPct = lastMonthCount > 0 ? Math.round(((thisMonthCount - lastMonthCount) / lastMonthCount) * 100) : 0
     const studentGrowth = `${growthPct >= 0 ? "+" : ""}${growthPct}% from last month`
 
     const activeCourseList = courses.filter((c) => c.status === "active")
     const activeCourses = activeCourseList.length
-    const quarterStart = new Date(thisYear, Math.floor(thisMonth / 3) * 3, 1)
-    const newCourses = courses.filter((c) => new Date(c.created_at) >= quarterStart)
+    const quarterStartMonth = Math.floor(thisMonth / 3) * 3 + 1
+    const quarterStartKey = `${thisYear}-${String(quarterStartMonth).padStart(2, "0")}`
+    const newCourses = courses.filter((c) => getMonthKeyFromDateKey(dateKeyInIST(new Date(c.created_at))) >= quarterStartKey)
     const newCoursesThisQuarter = newCourses.length
 
     // --- Today ---
@@ -153,9 +170,13 @@ export async function GET(request: Request) {
       .filter((t) => t.type === "expense" && dayOf(t.date) === todayStr)
       .reduce((sum, t) => sum + Number(t.amount), 0)
 
-    const dueThrough = new Date(now)
-    dueThrough.setDate(dueThrough.getDate() + 7)
-    const dueThroughStr = getLocalDateStr(dueThrough)
+    const [todayYear, todayMonth, todayDay] = todayStr.split("-").map(Number)
+    const dueThroughDate = new Date(Date.UTC(todayYear, todayMonth - 1, todayDay + 7))
+    const dueThroughStr = dateKey(
+      dueThroughDate.getUTCFullYear(),
+      dueThroughDate.getUTCMonth() + 1,
+      dueThroughDate.getUTCDate()
+    )
     const dueSoon = installments
       .filter(
         (installment) =>
@@ -177,7 +198,7 @@ export async function GET(request: Request) {
     }
 
     // --- Month totals behind the money cards ---
-    const monthKey = `${thisYear}-${String(thisMonth + 1).padStart(2, "0")}`
+    const monthKey = `${thisYear}-${String(thisMonthNumber).padStart(2, "0")}`
     const collectedThisMonth = payments
       .filter((payment) => payment.status === "Paid" && payment.payment_date?.startsWith(monthKey))
       .reduce((sum, payment) => sum + Number(payment.amount), 0)
@@ -194,15 +215,14 @@ export async function GET(request: Request) {
     // --- Daily collections (last 14 days) ---
     const dailyCollections: { day: string; label: string; amount: number }[] = []
     for (let i = DAILY_WINDOW - 1; i >= 0; i--) {
-      const d = new Date(now)
-      d.setDate(d.getDate() - i)
-      const key = getLocalDateStr(d)
+      const d = new Date(Date.UTC(todayYear, todayMonth - 1, todayDay - i))
+      const key = dateKey(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate())
       const amount = payments
         .filter((p) => p.status === "Paid" && dayOf(p.payment_date) === key)
         .reduce((sum, p) => sum + Number(p.amount), 0)
       dailyCollections.push({
-        day: String(d.getDate()),
-        label: `${String(d.getDate()).padStart(2, "0")} ${MONTHS[d.getMonth()]}`,
+        day: String(d.getUTCDate()),
+        label: `${String(d.getUTCDate()).padStart(2, "0")} ${MONTHS[d.getUTCMonth()]}`,
         amount,
       })
     }
@@ -210,14 +230,14 @@ export async function GET(request: Request) {
     // --- Enrollment Trends (last 6 months) ---
     const monthLabels: { label: string; key: string }[] = []
     for (let i = 5; i >= 0; i--) {
-      const d = new Date(thisYear, thisMonth - i, 1)
-      monthLabels.push({ label: MONTHS[d.getMonth()], key: getMonthKey(d) })
+      const d = new Date(Date.UTC(thisYear, thisMonth - i, 1))
+      const key = dateKey(d.getUTCFullYear(), d.getUTCMonth() + 1, 1)
+      monthLabels.push({ label: MONTHS[d.getUTCMonth()], key: getMonthKeyFromDateKey(key) })
     }
     const enrollmentTrends = monthLabels.map(({ label, key }) => {
       const count = students.filter((s) => {
         if (!s.enrollment_date) return false
-        const ed = new Date(s.enrollment_date)
-        return getMonthKey(ed) === key
+        return getMonthKeyFromDateKey(dayOf(s.enrollment_date)) === key
       }).length
       return { month: label, students: count }
     })

@@ -1,5 +1,8 @@
 "use client"
 
+import { localDate } from "@/lib/local-date"
+
+
 /**
  * The one print layout used for every payment and installment record in the
  * portal.
@@ -377,7 +380,11 @@ function paymentDocumentNumber(receipt: PaymentReceipt): string {
 
 export function buildPaymentReceiptHtml(receipt: PaymentReceipt): string {
   const statusTone = receipt.status === "Paid" ? "paid" : receipt.status === "Rejected" ? "rejected" : "pending"
-  const date = printDate(receipt.kind === "payment" ? receipt.date : new Date().toISOString().slice(0, 10))
+  // An installment slip is issued on the day it is printed, so it needs today's
+  // calendar day. `toISOString()` converts to UTC first, so in IST (UTC+5:30)
+  // anything printed between midnight and 05:30 comes back as yesterday — the
+  // exact off-by-one `lib/local-date.ts` exists to prevent.
+  const date = printDate(receipt.kind === "payment" ? receipt.date : localDate())
   const totalPaid = Number(receipt.paidToDate)
   const safe = escapeHtml
   const details = [

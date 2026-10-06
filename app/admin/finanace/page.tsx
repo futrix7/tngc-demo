@@ -55,7 +55,6 @@ import { ExportDialog } from "@/components/admin/export-dialog";
 import { supabase } from "@/lib/supabase";
 import { useToast } from "@/components/ui/sonner";
 import {
-  Area,
   BarChart,
   Bar,
   ComposedChart,
@@ -129,97 +128,186 @@ type CustomChartFilter =
 
 const FINANCE_PERIODS: { value: FinancePeriod; label: string; description: string }[] = [
   { value: "month", label: "Month", description: "Daily totals · current month" },
-  { value: "quarter", label: "Quarter", description: "Monthly totals · latest 3 months" },
+  { value: "quarter", label: "Last 3 Months", description: "Monthly totals · rolling 3 months" },
   { value: "year", label: "Year", description: "Monthly totals · current year" },
 ];
 
 function parseLocalDate(value: string): Date {
-  const [year, month, day] = value.slice(0, 10).split("-").map(Number);
-  return new Date(year, month - 1, day);
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+  if (!match) return new Date(Number.NaN);
+  return new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
 }
 
 function toLocalDateKey(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
 }
 
 function monthKey(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 
 function formatDateForUser(value: string): string {
-  const [year, month, day] = value.split("-");
-  return `${day}/${month}/${year}`;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  return match ? `${match[3]}/${match[2]}/${match[1]}` : value;
+}
+
+function dateOnly(value: string): string {
+  return value.slice(0, 10);
+}
+
+function todayInInstituteTime(): Date {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const value = (type: string) => Number(parts.find((part) => part.type === type)?.value);
+  return new Date(Date.UTC(value("year"), value("month") - 1, value("day")));
+}
+
+function shiftUTCMonths(date: Date, amount: number): Date {
+  const targetMonth = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + amount, 1));
+  const targetMonthEnd = new Date(Date.UTC(targetMonth.getUTCFullYear(), targetMonth.getUTCMonth() + 1, 0));
+  return new Date(Date.UTC(
+    targetMonth.getUTCFullYear(),
+    targetMonth.getUTCMonth(),
+    Math.min(date.getUTCDate(), targetMonthEnd.getUTCDate())
+  ));
+}
+
+function getFinanceRange(
+  period: FinancePeriod,
+  customFilter: CustomChartFilter | null,
+  today: Date
+): { start: Date; end: Date } {
+  const start = customFilter
+    ? customFilter.type === "month"
+      ? parseLocalDate(`${customFilter.value}-01`)
+      : customFilter.type === "year"
+        ? new Date(Date.UTC(Number(customFilter.value), 0, 1))
+        : parseLocalDate(customFilter.from)
+    : period === "month"
+      ? new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1))
+      : period === "quarter"
+        ? shiftUTCMonths(today, -3)
+        : new Date(Date.UTC(today.getUTCFullYear(), 0, 1));
+  const end = customFilter
+    ? customFilter.type === "month"
+      ? new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 0))
+      : customFilter.type === "year"
+        ? new Date(Date.UTC(start.getUTCFullYear(), 11, 31))
+        : parseLocalDate(customFilter.to)
+    : period === "month"
+      ? new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 0))
+      : period === "quarter"
+        ? today
+        : new Date(Date.UTC(today.getUTCFullYear(), 11, 31));
+  return { start, end };
+}
+
+function getFinanceGranularity(
+  period: FinancePeriod,
+  customFilter: CustomChartFilter | null,
+  dateFilter: { from: string; to: string },
+  start: Date,
+  end: Date
+): "day" | "week" | "month" {
+  const useDateGranularity = customFilter?.type === "dates" || Boolean(dateFilter.from || dateFilter.to);
+  if (!useDateGranularity) {
+    return customFilter?.type === "year" || period !== "month" ? "month" : "day";
+  }
+  const dayCount = Math.floor((end.getTime() - start.getTime()) / 86_400_000) + 1;
+  return dayCount <= 45 ? "day" : dayCount <= 180 ? "week" : "month";
 }
 
 function getFinanceBuckets(
   period: FinancePeriod,
   customFilter: CustomChartFilter | null,
-  today = new Date()
+  dateFilter: { from: string; to: string },
+  today = todayInInstituteTime()
 ) {
   const buckets: { key: string; label: string }[] = [];
-  const granularity = customFilter?.type === "year" || period !== "month" ? "month" : "day";
-  const start = customFilter
-    ? customFilter.type === "month"
-      ? new Date(Number(customFilter.value.slice(0, 4)), Number(customFilter.value.slice(5, 7)) - 1, 1)
-      : customFilter.type === "year"
-        ? new Date(Number(customFilter.value), 0, 1)
-        : parseLocalDate(customFilter.from)
-    : period === "month"
-      ? new Date(today.getFullYear(), today.getMonth(), 1)
-      : period === "quarter"
-        ? new Date(today.getFullYear(), today.getMonth() - 2, 1)
-        : new Date(today.getFullYear(), 0, 1);
-  const end = customFilter
-    ? customFilter.type === "month"
-      ? new Date(start.getFullYear(), start.getMonth() + 1, 0)
-      : customFilter.type === "year"
-        ? new Date(start.getFullYear(), 11, 31)
-        : parseLocalDate(customFilter.to)
-    : period === "month"
-      ? new Date(today.getFullYear(), today.getMonth() + 1, 0)
-      : period === "quarter"
-        ? new Date(today.getFullYear(), today.getMonth() + 1, 0)
-        : new Date(today.getFullYear(), 11, 31);
+  const range = getFinanceRange(period, customFilter, today);
+  const start = new Date(Math.max(
+    range.start.getTime(),
+    dateFilter.from ? parseLocalDate(dateFilter.from).getTime() : range.start.getTime()
+  ));
+  const end = new Date(Math.min(
+    range.end.getTime(),
+    dateFilter.to ? parseLocalDate(dateFilter.to).getTime() : range.end.getTime()
+  ));
+
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) return buckets;
+
+  const granularity = getFinanceGranularity(period, customFilter, dateFilter, start, end);
 
   if (granularity === "day") {
-    for (const cursor = new Date(start); cursor <= end; cursor.setDate(cursor.getDate() + 1)) {
+    for (const cursor = new Date(start); cursor <= end; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
       buckets.push({
         key: toLocalDateKey(cursor),
-        label: cursor.toLocaleDateString("en-IN", { day: "numeric", month: "short" }),
+        label: cursor.toLocaleDateString("en-IN", { day: "numeric", month: "short", timeZone: "UTC" }),
+      });
+    }
+  } else if (granularity === "week") {
+    const cursor = new Date(start);
+    cursor.setUTCDate(cursor.getUTCDate() - ((cursor.getUTCDay() + 6) % 7));
+    for (; cursor <= end; cursor.setUTCDate(cursor.getUTCDate() + 7)) {
+      const weekEnd = new Date(cursor);
+      weekEnd.setUTCDate(weekEnd.getUTCDate() + 6);
+      buckets.push({
+        key: toLocalDateKey(cursor),
+        label: `${cursor.toLocaleDateString("en-IN", { day: "numeric", month: "short", timeZone: "UTC" })}–${weekEnd.toLocaleDateString("en-IN", { day: "numeric", month: "short", timeZone: "UTC" })}`,
       });
     }
   } else {
-    for (const cursor = new Date(start.getFullYear(), start.getMonth(), 1);
+    for (const cursor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 1));
       cursor <= end;
-      cursor.setMonth(cursor.getMonth() + 1)
-    ) {
+      cursor.setUTCMonth(cursor.getUTCMonth() + 1)) {
       buckets.push({
         key: monthKey(cursor),
-        label: cursor.toLocaleDateString("en-IN", { month: "short", year: "2-digit" }),
+        label: cursor.toLocaleDateString("en-IN", { month: "short", year: "2-digit", timeZone: "UTC" }),
       });
     }
   }
   return buckets;
 }
 
-function getFinancePeriodKey(dateValue: string, granularity: "day" | "month"): string {
+function getFinancePeriodKey(dateValue: string, granularity: "day" | "week" | "month"): string {
   const date = parseLocalDate(dateValue);
-  return granularity === "day" ? toLocalDateKey(date) : monthKey(date);
+  if (granularity === "day") return toLocalDateKey(date);
+  if (granularity === "month") return monthKey(date);
+  const monday = new Date(date);
+  monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7));
+  return toLocalDateKey(monday);
 }
 
 function buildFinanceCharts(
   records: FinanceRecord[],
   period: FinancePeriod,
-  customFilter: CustomChartFilter | null
+  customFilter: CustomChartFilter | null,
+  dateFilter: { from: string; to: string }
 ) {
-  const buckets = getFinanceBuckets(period, customFilter);
-  const granularity = customFilter?.type === "year" || period !== "month" ? "month" : "day";
+  const buckets = getFinanceBuckets(period, customFilter, dateFilter);
+  const range = getFinanceRange(period, customFilter, todayInInstituteTime());
+  const start = range.start;
+  const end = range.end;
+  const baseStart = dateFilter.from
+    ? new Date(Math.max(start.getTime(), parseLocalDate(dateFilter.from).getTime()))
+    : start;
+  const baseEnd = dateFilter.to
+    ? new Date(Math.min(end.getTime(), parseLocalDate(dateFilter.to).getTime()))
+    : end;
+  const granularity = getFinanceGranularity(period, customFilter, dateFilter, baseStart, baseEnd);
   const bucketKeys = new Set(buckets.map((bucket) => bucket.key));
   const chartRecords = records.filter((record) =>
-    bucketKeys.has(getFinancePeriodKey(record.date, granularity))
+    baseStart <= baseEnd
+    && dateOnly(record.date) >= toLocalDateKey(baseStart)
+    && dateOnly(record.date) <= toLocalDateKey(baseEnd)
+    && bucketKeys.has(getFinancePeriodKey(record.date, granularity))
   );
   const trendByKey = new Map(
     buckets.map((bucket) => [bucket.key, { period: bucket.label, revenue: 0, expenses: 0, net: 0 }])
@@ -298,7 +386,20 @@ const TRANSACTION_LIMIT_OPTIONS = [
 ] as const;
 
 function formatCurrencyINR(value: number): string {
-  return `₹${Number(value).toLocaleString("en-IN")}`;
+  const sign = value < 0 ? "-" : "";
+  return `${sign}₹${Math.abs(Number(value)).toLocaleString("en-IN")}`;
+}
+
+function formatCompactCurrencyINR(value: number): string {
+  const absoluteValue = Math.abs(value);
+  const sign = value < 0 ? "-" : "";
+  if (absoluteValue >= 100_000) {
+    return `${sign}₹${(absoluteValue / 100_000).toLocaleString("en-IN", { maximumFractionDigits: 1 })}L`;
+  }
+  if (absoluteValue >= 1_000) {
+    return `${sign}₹${(absoluteValue / 1_000).toLocaleString("en-IN", { maximumFractionDigits: 1 })}K`;
+  }
+  return formatCurrencyINR(value);
 }
 
 export default function AdminFinancePage() {
@@ -335,14 +436,13 @@ export default function AdminFinancePage() {
   const [chartFilterOpen, setChartFilterOpen] = useState(false);
   const [chartFilterType, setChartFilterType] = useState<CustomChartFilter["type"]>("month");
   const [chartMonth, setChartMonth] = useState(() => {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    return monthKey(todayInInstituteTime());
   });
   const [chartFrom, setChartFrom] = useState("");
   const [chartTo, setChartTo] = useState("");
-  const [chartYear, setChartYear] = useState(String(new Date().getFullYear()));
+  const [chartYear, setChartYear] = useState(() => String(todayInInstituteTime().getUTCFullYear()));
   const [yearRangeStart, setYearRangeStart] = useState(
-    Math.floor(new Date().getFullYear() / 12) * 12
+    Math.floor(todayInInstituteTime().getUTCFullYear() / 12) * 12
   );
   const [customChartFilter, setCustomChartFilter] = useState<CustomChartFilter | null>(null);
   const pendingFilterFetch = useRef<((success: boolean) => void) | null>(null);
@@ -447,6 +547,7 @@ export default function AdminFinancePage() {
             .from("transactions")
             .select("id, date, description, category, amount, type, branch_id, teacher_id")
             .order("date", { ascending: false })
+            .order("id", { ascending: true })
           const result = await query.range(offset, offset + 999)
           if (result.error) return { data: null, error: result.error }
           rows.push(...(result.data ?? []))
@@ -460,7 +561,9 @@ export default function AdminFinancePage() {
         const rows: { id: string; student_name: string; course_slug: string | null; amount: number; payment_date: string; method: string; status: string }[] = []
         let offset = 0
         while (true) {
-          const query = supabase.from("payments").select("id, student_name, course_slug, amount, payment_date, method, status").order("payment_date", { ascending: false })
+          const query = supabase.from("payments").select("id, student_name, course_slug, amount, payment_date, method, status")
+            .order("payment_date", { ascending: false })
+            .order("id", { ascending: true })
           const result = await query.range(offset, offset + 999)
           if (result.error) return { data: null, error: result.error }
           rows.push(...(result.data ?? []))
@@ -505,8 +608,8 @@ export default function AdminFinancePage() {
       }
 
       const matchesDateFilter = (date: string) =>
-        (!dateFilters.from || date >= dateFilters.from)
-        && (!dateFilters.to || date <= dateFilters.to);
+        (!dateFilters.from || dateOnly(date) >= dateFilters.from)
+        && (!dateFilters.to || dateOnly(date) <= dateFilters.to);
       const allVerifiedPayments = payments.filter((payment) => payment.status === "Paid");
       const allExpenseTransactions = transactions.filter((transaction) => transaction.type === "expense");
       setFinanceRecords([
@@ -606,11 +709,7 @@ export default function AdminFinancePage() {
       const mergedIncomeRows: RecentTransaction[] = verifiedPayments.map((payment) => ({
         id: payment.id,
         dateValue: payment.payment_date,
-        date: new Date(payment.payment_date).toLocaleDateString("en-IN", {
-          day: "2-digit",
-          month: "short",
-          year: "numeric",
-        }),
+        date: formatDateForUser(payment.payment_date),
         description: payment.student_name || "Course payment",
         category: (payment.course_slug && courseMap.get(payment.course_slug)) || "Course Fee",
         amount: formatCurrencyINR(Number(payment.amount)),
@@ -621,11 +720,7 @@ export default function AdminFinancePage() {
       const mergedExpenseRows: RecentTransaction[] = expenseTransactions.map((transaction) => ({
         id: transaction.id,
         dateValue: transaction.date,
-        date: new Date(transaction.date).toLocaleDateString("en-IN", {
-          day: "2-digit",
-          month: "short",
-          year: "numeric",
-        }),
+        date: formatDateForUser(transaction.date),
         description: transaction.description || "Expense",
         category: transaction.category || "Other",
         amount: formatCurrencyINR(Number(transaction.amount)),
@@ -662,29 +757,79 @@ export default function AdminFinancePage() {
     };
   }, [authenticated, dateFilters, refreshKey]);
 
+  const chartRecords = useMemo(
+    () => financeRecords.filter((record) =>
+      (!dateFilters.from || dateOnly(record.date) >= dateFilters.from)
+      && (!dateFilters.to || dateOnly(record.date) <= dateFilters.to)
+    ),
+    [financeRecords, dateFilters]
+  );
   const { trend: trendData, expenseTrend, expenseCategories } = useMemo(
-    () => buildFinanceCharts(financeRecords, financePeriod, customChartFilter),
-    [financeRecords, financePeriod, customChartFilter]
+    () => buildFinanceCharts(chartRecords, financePeriod, customChartFilter, dateFilters),
+    [chartRecords, financePeriod, customChartFilter, dateFilters]
+  );
+  const chartTotals = useMemo(
+    () => trendData.reduce(
+      (totals, bucket) => ({
+        revenue: totals.revenue + bucket.revenue,
+        expenses: totals.expenses + bucket.expenses,
+        net: totals.net + bucket.net,
+      }),
+      { revenue: 0, expenses: 0, net: 0 }
+    ),
+    [trendData]
   );
   const revenueAccent = "#22c55e";
   const expenseAccent = "#ef4444";
-  const selectedPeriodDescription = customChartFilter?.type === "month"
-    ? `Daily totals · ${parseLocalDate(`${customChartFilter.value}-01`).toLocaleDateString("en-IN", { month: "long", year: "numeric" })}`
+  const chartDateRange = getFinanceRange(financePeriod, customChartFilter, todayInInstituteTime());
+  const chartDateStart = dateFilters.from
+    ? new Date(Math.max(chartDateRange.start.getTime(), parseLocalDate(dateFilters.from).getTime()))
+    : chartDateRange.start;
+  const chartDateEnd = dateFilters.to
+    ? new Date(Math.min(chartDateRange.end.getTime(), parseLocalDate(dateFilters.to).getTime()))
+    : chartDateRange.end;
+  const chartGranularity = getFinanceGranularity(
+    financePeriod,
+    customChartFilter,
+    dateFilters,
+    chartDateStart,
+    chartDateEnd
+  );
+  const chartGroupingLabel = chartGranularity === "day"
+    ? "Daily totals"
+    : chartGranularity === "week"
+      ? "Weekly totals"
+      : "Monthly totals";
+  const chartPeriodLabel = customChartFilter?.type === "month"
+    ? parseLocalDate(`${customChartFilter.value}-01`).toLocaleDateString("en-IN", {
+      month: "long",
+      year: "numeric",
+      timeZone: "UTC",
+    })
     : customChartFilter?.type === "dates"
       ? `${formatDateForUser(customChartFilter.from)} to ${formatDateForUser(customChartFilter.to)}`
       : customChartFilter?.type === "year"
-        ? `Monthly totals · ${customChartFilter.value}`
-        : FINANCE_PERIODS.find((period) => period.value === financePeriod)?.description ?? "";
+        ? customChartFilter.value
+        : FINANCE_PERIODS.find((period) => period.value === financePeriod)?.description.split(" · ")[1] ?? "";
+  const selectedPeriodDescription = `${chartGroupingLabel} · ${chartPeriodLabel}`;
+  const financeDateDescription = dateFilters.from || dateFilters.to
+    ? `${dateFilters.from ? formatDateForUser(dateFilters.from) : "Any date"} – ${dateFilters.to ? formatDateForUser(dateFilters.to) : "Any date"}`
+    : "All dates";
   const financeFilterFields: FilterField[] = [
     { key: "from", label: "From date", type: "date", defaultValue: "" },
     { key: "to", label: "To date", type: "date", defaultValue: "" },
   ];
 
   async function applyFinanceFilters(values: FilterValues) {
+    const from = values.from || "";
+    const to = values.to || "";
+    if (from && to && from > to) {
+      throw new Error("The start date must be on or before the end date.");
+    }
     setDataLoading(true);
     setDataError(null);
     filterFetchSucceeded.current = true;
-    setDateFilters({ from: values.from || "", to: values.to || "" });
+    setDateFilters({ from, to });
     setRefreshKey((key) => key + 1);
     const succeeded = await new Promise<boolean>((resolve) => {
       pendingFilterFetch.current = resolve;
@@ -694,7 +839,9 @@ export default function AdminFinancePage() {
 
   function applyChartFilter() {
     if (chartFilterType === "month") {
-      if (!/^\d{4}-\d{2}$/.test(chartMonth)) {
+      const monthMatch = /^(\d{4})-(\d{2})$/.exec(chartMonth);
+      const year = Number(monthMatch?.[1]);
+      if (!monthMatch || year < 1900 || year > 9999 || Number(monthMatch[2]) < 1 || Number(monthMatch[2]) > 12) {
         toast("Select a valid month.", { variant: "destructive" });
         return;
       }
@@ -731,7 +878,7 @@ export default function AdminFinancePage() {
       <div className="flex items-center justify-between">
         <div className="space-y-1">
           <h1 className="text-2xl font-bold tracking-tight">Finance</h1>
-          <p className="text-xs text-muted-foreground">Financial overview for the selected period</p>
+          <p className="text-xs text-muted-foreground">Financial overview · {financeDateDescription}</p>
         </div>
         {authenticated && (
           <div className="flex items-center gap-2">
@@ -856,7 +1003,9 @@ export default function AdminFinancePage() {
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                       <CardTitle>Cash Flow Trend</CardTitle>
-                      <CardDescription>{selectedPeriodDescription} · revenue, expenses, and net cash flow</CardDescription>
+                      <CardDescription>
+                        {selectedPeriodDescription} · {financeDateDescription} · revenue, expenses, and net cash flow
+                      </CardDescription>
                     </div>
                     <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Cash flow time period">
                       {FINANCE_PERIODS.map((period) => (
@@ -902,21 +1051,11 @@ export default function AdminFinancePage() {
                 <CardContent>
                   <ResponsiveContainer width="100%" height={350}>
                     <ComposedChart data={trendData}>
-                      <defs>
-                        <linearGradient id="colorRevenue" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor={revenueAccent} stopOpacity={0.3} />
-                          <stop offset="95%" stopColor={revenueAccent} stopOpacity={0} />
-                        </linearGradient>
-                        <linearGradient id="colorExpenses" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor={expenseAccent} stopOpacity={0.3} />
-                          <stop offset="95%" stopColor={expenseAccent} stopOpacity={0} />
-                        </linearGradient>
-                      </defs>
                       <CartesianGrid {...gridStyle} />
-                      <XAxis dataKey="period" tick={axisStyle} />
+                      <XAxis dataKey="period" tick={axisStyle} interval="preserveStartEnd" minTickGap={24} />
                       <YAxis
                         tick={axisStyle}
-                        tickFormatter={(value) => `₹${(value / 1000).toFixed(0)}K`}
+                        tickFormatter={(value) => formatCompactCurrencyINR(Number(value))}
                       />
                       <Tooltip
                         contentStyle={tooltipStyle}
@@ -926,22 +1065,16 @@ export default function AdminFinancePage() {
                         ]}
                       />
                       <Legend />
-                      <Area
-                        type="monotone"
+                      <Bar
                         dataKey="revenue"
-                        stroke={revenueAccent}
-                        strokeWidth={2}
-                        fillOpacity={1}
-                        fill="url(#colorRevenue)"
+                        fill={revenueAccent}
+                        radius={[4, 4, 0, 0]}
                         name="Revenue"
                       />
-                      <Area
-                        type="monotone"
+                      <Bar
                         dataKey="expenses"
-                        stroke={expenseAccent}
-                        strokeWidth={2}
-                        fillOpacity={1}
-                        fill="url(#colorExpenses)"
+                        fill={expenseAccent}
+                        radius={[4, 4, 0, 0]}
                         name="Expenses"
                       />
                       <Line
@@ -954,6 +1087,27 @@ export default function AdminFinancePage() {
                       />
                     </ComposedChart>
                   </ResponsiveContainer>
+                  {trendData.every((bucket) => bucket.revenue === 0 && bucket.expenses === 0) && (
+                    <p className="py-2 text-center text-sm text-muted-foreground">
+                      No paid collections or expenses match this chart period and date filter.
+                    </p>
+                  )}
+                  <div className="mt-4 grid gap-3 border-t pt-4 text-sm sm:grid-cols-3">
+                    <div>
+                      <p className="text-muted-foreground">Revenue</p>
+                      <p className="font-semibold text-emerald-600">{formatCurrencyINR(chartTotals.revenue)}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">Expenses</p>
+                      <p className="font-semibold text-red-600">{formatCurrencyINR(chartTotals.expenses)}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">Net cash flow</p>
+                      <p className={cn("font-semibold", chartTotals.net >= 0 ? "text-emerald-600" : "text-red-600")}>
+                        {formatCurrencyINR(chartTotals.net)}
+                      </p>
+                    </div>
+                  </div>
                 </CardContent>
               </Card>
 
@@ -991,6 +1145,8 @@ export default function AdminFinancePage() {
                           <input
                             id="chart-filter-month"
                             type="month"
+                            min="1900-01"
+                            max="9999-12"
                             value={chartMonth}
                             onChange={(event) => setChartMonth(event.target.value)}
                             className="h-10 w-full rounded-md border border-input bg-background pl-10 pr-3 text-sm"
@@ -1028,7 +1184,8 @@ export default function AdminFinancePage() {
                               variant="ghost"
                               size="icon-sm"
                               aria-label="Previous years"
-                              onClick={() => setYearRangeStart((year) => year - 12)}
+                              disabled={yearRangeStart <= 1900}
+                              onClick={() => setYearRangeStart((year) => Math.max(1900, year - 12))}
                             >
                               <ChevronLeft />
                             </Button>
@@ -1040,7 +1197,8 @@ export default function AdminFinancePage() {
                               variant="ghost"
                               size="icon-sm"
                               aria-label="Next years"
-                              onClick={() => setYearRangeStart((year) => year + 12)}
+                              disabled={yearRangeStart >= 9988}
+                              onClick={() => setYearRangeStart((year) => Math.min(9988, year + 12))}
                             >
                               <ChevronRight />
                             </Button>
@@ -1054,6 +1212,7 @@ export default function AdminFinancePage() {
                               size="sm"
                               variant={chartYear === year ? "default" : "outline"}
                               aria-pressed={chartYear === year}
+                              disabled={Number(year) < 1900 || Number(year) > 9999}
                               onClick={() => setChartYear(year)}
                             >
                               {year}
@@ -1078,10 +1237,10 @@ export default function AdminFinancePage() {
                 <Card>
                   <CardHeader>
                     <CardTitle>Expense Breakdown</CardTitle>
-                    <CardDescription>Category-wise expense distribution</CardDescription>
+                    <CardDescription>Category-wise expense distribution · {financeDateDescription}</CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <ResponsiveContainer width="100%" height={300}>
+                    {expenseBreakdown.length > 0 ? <ResponsiveContainer width="100%" height={300}>
                       <PieChart>
                         <Pie
                           data={expenseBreakdown}
@@ -1101,11 +1260,15 @@ export default function AdminFinancePage() {
                         </Pie>
                         <Tooltip
                           contentStyle={tooltipStyle}
-                          formatter={(value) => [`₹${(Number(value) / 1000).toFixed(0)}K`, ""]}
+                          formatter={(value) => [formatCurrencyINR(Number(value)), ""]}
                         />
                         <Legend />
                       </PieChart>
-                    </ResponsiveContainer>
+                    </ResponsiveContainer> : (
+                      <p className="py-12 text-center text-sm text-muted-foreground">
+                        No expenses match the selected date filter.
+                      </p>
+                    )}
                     <div className="mt-4 space-y-2">
                       {expenseBreakdown.map((item, index) => (
                         <div key={item.name} className="flex items-center justify-between text-sm">
@@ -1117,7 +1280,7 @@ export default function AdminFinancePage() {
                             <span>{item.name}</span>
                           </div>
                           <div className="flex items-center gap-2">
-                            <span className="text-muted-foreground">₹{(item.value / 1000).toFixed(0)}K</span>
+                            <span className="text-muted-foreground">{formatCurrencyINR(item.value)}</span>
                             <Badge variant="secondary">{item.percentage}%</Badge>
                           </div>
                         </div>
@@ -1129,10 +1292,10 @@ export default function AdminFinancePage() {
                 <Card>
                   <CardHeader>
                     <CardTitle>Collections by Payment Method</CardTitle>
-                    <CardDescription>Paid revenue split by how it was collected</CardDescription>
+                    <CardDescription>Paid revenue split by how it was collected · {financeDateDescription}</CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <ResponsiveContainer width="100%" height={300}>
+                    {paymentMethodData.length > 0 ? <ResponsiveContainer width="100%" height={300}>
                       <PieChart>
                         <Pie
                           data={paymentMethodData}
@@ -1156,7 +1319,11 @@ export default function AdminFinancePage() {
                         />
                         <Legend />
                       </PieChart>
-                    </ResponsiveContainer>
+                    </ResponsiveContainer> : (
+                      <p className="py-12 text-center text-sm text-muted-foreground">
+                        No paid collections match the selected date filter.
+                      </p>
+                    )}
                     <div className="mt-4 space-y-2">
                       {paymentMethodData.map((item, index) => (
                         <div key={item.name} className="flex items-center justify-between text-sm">
@@ -1182,16 +1349,16 @@ export default function AdminFinancePage() {
               <Card>
                 <CardHeader>
                   <CardTitle>Expense Trends by Category</CardTitle>
-                  <CardDescription>{selectedPeriodDescription} · top expense categories</CardDescription>
+                  <CardDescription>{selectedPeriodDescription} · {financeDateDescription} · top expense categories</CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <ResponsiveContainer width="100%" height={320}>
+                  {expenseCategories.length > 0 ? <ResponsiveContainer width="100%" height={320}>
                     <BarChart data={expenseTrend}>
                       <CartesianGrid {...gridStyle} />
-                      <XAxis dataKey="period" tick={axisStyle} />
+                      <XAxis dataKey="period" tick={axisStyle} interval="preserveStartEnd" minTickGap={24} />
                       <YAxis
                         tick={axisStyle}
-                        tickFormatter={(value) => `₹${(Number(value) / 1000).toFixed(0)}K`}
+                        tickFormatter={(value) => formatCompactCurrencyINR(Number(value))}
                       />
                       <Tooltip
                         contentStyle={tooltipStyle}
@@ -1208,7 +1375,11 @@ export default function AdminFinancePage() {
                         />
                       ))}
                     </BarChart>
-                  </ResponsiveContainer>
+                  </ResponsiveContainer> : (
+                    <p className="py-12 text-center text-sm text-muted-foreground">
+                      No expenses match this chart period and date filter.
+                    </p>
+                  )}
                 </CardContent>
               </Card>
 

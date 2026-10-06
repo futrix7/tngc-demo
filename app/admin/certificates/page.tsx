@@ -347,6 +347,19 @@ export default function AdminCertificatesPage() {
     let activeTitle = titlesToIssue[0]
 
     try {
+      const { data: existingCredentials, error: credentialsError } = await supabase
+        .from("certificates")
+        .select("credential_id")
+
+      if (credentialsError) {
+        throw new Error(`Unable to determine the next certificate number: ${credentialsError.message}`)
+      }
+
+      let certificateSerial = (existingCredentials ?? []).reduce((highest, certificate) => {
+        const match = /^TNGC\/(\d+)\/N$/i.exec(certificate.credential_id ?? "")
+        return match ? Math.max(highest, Number(match[1])) : highest
+      }, 1000)
+
       for (const title of titlesToIssue) {
         activeTitle = title
         const { data: existingCert, error: existingError } = await supabase
@@ -366,7 +379,8 @@ export default function AdminCertificatesPage() {
         if (existingCert?.status === "Issued") continue
 
         const details = detailsByTitle[title] ?? EMPTY_CERTIFICATE_DETAILS
-        const credentialId = `TNGC/${mintId("ROLL").split("-").at(-1)?.toUpperCase() ?? ""}/N`
+        certificateSerial += 1
+        const credentialId = `TNGC/${String(certificateSerial).padStart(4, "0")}/N`
         const certificateData = {
           student_name: student.full_name,
           name: title,

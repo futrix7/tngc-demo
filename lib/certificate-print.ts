@@ -1,7 +1,5 @@
 "use client"
 
-import { CERTIFICATE_SIGNATURE_PATHS, CERTIFICATE_STAMP_PATH } from "@/lib/certificate-assets"
-
 export interface PrintableCertificate {
   studentName: string
   guardianName: string
@@ -34,6 +32,7 @@ export function getCertificateCourseName(certificateName: string, courseName: st
 const INSTITUTE_NAME = "THE NEW GENERATION COMPUTERS"
 const FONT_SERIF = "'Cormorant Garamond', 'Palatino Linotype', 'Book Antiqua', Georgia, serif"
 const FONT_SCRIPT = "'Pinyon Script', 'Monotype Corsiva', cursive"
+const FONT_SANS = "Montserrat, Arial, Helvetica, sans-serif"
 
 // A4 landscape @ 96dpi
 const W = 1123
@@ -44,9 +43,9 @@ const CX = W / 2
 const L = 96
 const R = 1026
 
-const LABEL_SIZE = 22
-const CHAR_W = 8.8 // approx. label width per character at LABEL_SIZE
-const GAP = 6
+const LABEL_SIZE = 23
+const CHAR_W = 8.7 // approx. label width per character at LABEL_SIZE
+const GAP = 8
 
 function escapeHtml(value: string): string {
   return value
@@ -82,7 +81,7 @@ function valueText(
   x1: number,
   x2: number,
   y: number,
-  maxSize = 19,
+  maxSize = 21,
   minSize = 10,
   factor = 0.6
 ): string {
@@ -108,6 +107,90 @@ function rule(x1: number, x2: number, y: number): string {
   return `<line x1="${x1}" y1="${y + 6}" x2="${x2}" y2="${y + 6}" stroke="#1b2340" stroke-width="0.9" />`
 }
 
+/** Empty signature space above a line, followed by the printed name and designation. */
+function signatureBlock(x1: number, x2: number, lineY: number, name: string, role: string): string {
+  const cx = (x1 + x2) / 2
+  return `<line x1="${x1}" y1="${lineY}" x2="${x2}" y2="${lineY}" stroke="#1b2340" stroke-width="0.9" />
+      <text x="${cx}" y="${lineY + 20}" text-anchor="middle" font-family="${FONT_SANS}" font-weight="700" font-size="13" fill="#1b2340">${escapeHtml(name)}</text>
+      <text x="${cx}" y="${lineY + 36}" text-anchor="middle" font-family="${FONT_SANS}" font-weight="500" font-size="10.5" fill="#1b2340">${escapeHtml(role)}</text>`
+}
+
+function metaRow(labelText: string, value: string, y: number): string {
+  return `<text x="${L}" y="${y}" font-family="${FONT_SANS}" font-weight="700" font-size="12" letter-spacing="0.4" fill="#1b2340">${labelText}</text>
+      <line x1="${L + 62}" y1="${y + 3}" x2="${L + 200}" y2="${y + 3}" stroke="#1b2340" stroke-width="0.9" />
+      ${valueText(value, L + 62, L + 200, y, 14, 8, 0.6)}`
+}
+
+const ADDRESS_LINE = "# 3-3-21/B, 1st Floor, Sharadanagar, RTC Colony Road, Ramanthapur, Hyderabad - 500013."
+const WHATSAPP_NUMBER = "8790745614"
+const WHATSAPP_URL = "https://wa.me/918790745614"
+
+const FOOTER_TOP = 726
+const FOOTER_H = 32
+
+/** Full-width footer band with address, phone and website. */
+function footerBar(): string {
+  const mid = FOOTER_TOP + FOOTER_H / 2 + 4
+  const addr = fitText(ADDRESS_LINE, 640, 12, 8, 0.52)
+  const t = (x: number, anchor: string, text: string, size: string, extra = "") =>
+    `<text x="${x}" y="${mid}" text-anchor="${anchor}" font-family="${FONT_SANS}" font-weight="600" font-size="${size}" fill="#fff"${extra}>${escapeHtml(text)}</text>`
+  return `<rect x="36" y="${FOOTER_TOP}" width="${W - 72}" height="${FOOTER_H}" fill="#1d2a55" />
+      <rect x="36" y="${FOOTER_TOP}" width="${W - 72}" height="2" fill="#b8923f" />
+      ${t(L, "start", ADDRESS_LINE, addr.size, addr.squeeze)}
+      <a href="${WHATSAPP_URL}" target="_blank" rel="noopener noreferrer" aria-label="WhatsApp ${WHATSAPP_NUMBER}">
+        ${t(R, "end", `WhatsApp: ${WHATSAPP_NUMBER}`, "12")}
+      </a>`
+}
+
+/** ISO 9001, IAF and DAC marks redrawn as vectors from the original certificate. */
+function accreditationLogos(x: number, cy: number): string {
+  const navy = "#1f3f7a"
+  const blue = "#2b5d9b"
+
+  // ISO 9001: ring with tick + banner
+  const ic = x + 24
+  const iso = `<g>
+        <polygon points="${x + 40},${cy - 19} ${x + 100},${cy - 19} ${x + 110},${cy + 22} ${x + 40},${cy + 22}" fill="${navy}" />
+        <circle cx="${ic}" cy="${cy}" r="23" fill="#fff" stroke="${navy}" stroke-width="3" />
+        <circle cx="${ic}" cy="${cy}" r="17" fill="none" stroke="${navy}" stroke-width="0.8" />
+        <path d="M${ic - 15} ${cy - 1} L${ic - 5} ${cy + 11} L${ic + 15} ${cy - 25}" fill="none" stroke="${navy}" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round" />
+        <text x="${x + 74}" y="${cy - 3}" text-anchor="middle" font-family="${FONT_SANS}" font-weight="800" font-size="16" letter-spacing="1" fill="#fff">ISO</text>
+        <text x="${x + 74}" y="${cy + 16}" text-anchor="middle" font-family="${FONT_SERIF}" font-weight="600" font-size="19" fill="#fff">9001</text>
+      </g>`
+
+  // IAF: blue ellipse with ringed text and grid
+  const fx = x + 124 + 35
+  const iaf = `<g>
+        <defs>
+          <path id="iafTop" d="M${fx - 26} ${cy + 1} A26 17 0 0 1 ${fx + 26} ${cy + 1}" />
+          <path id="iafBottom" d="M${fx - 31} ${cy - 1} A31 21.5 0 0 0 ${fx + 31} ${cy - 1}" />
+        </defs>
+        <ellipse cx="${fx}" cy="${cy}" rx="35" ry="24" fill="${blue}" />
+        <ellipse cx="${fx}" cy="${cy}" rx="29" ry="19" fill="none" stroke="#fff" stroke-width="0.8" />
+        <g stroke="#fff" stroke-width="0.4" fill="none" opacity="0.7">
+          <ellipse cx="${fx}" cy="${cy}" rx="12" ry="19" />
+          <line x1="${fx - 29}" y1="${cy}" x2="${fx + 29}" y2="${cy}" />
+          <line x1="${fx - 26}" y1="${cy - 9}" x2="${fx + 26}" y2="${cy - 9}" />
+          <line x1="${fx - 26}" y1="${cy + 9}" x2="${fx + 26}" y2="${cy + 9}" />
+        </g>
+        <text font-family="${FONT_SANS}" font-weight="700" font-size="5" letter-spacing="0.9" fill="#fff"><textPath href="#iafTop" startOffset="50%" text-anchor="middle">INTERNATIONAL</textPath></text>
+        <text font-family="${FONT_SANS}" font-weight="700" font-size="4.6" letter-spacing="0.6" fill="#fff"><textPath href="#iafBottom" startOffset="50%" text-anchor="middle">ACCREDITATION FORUM</textPath></text>
+        <text x="${fx}" y="${cy + 3.5}" text-anchor="middle" font-family="${FONT_SANS}" font-weight="800" font-size="9.5" fill="#fff" stroke="${blue}" stroke-width="0.6" paint-order="stroke fill">www.iaf.nu</text>
+      </g>`
+
+  // DAC: triangle with leaf
+  const dx = x + 208 + 23
+  const dac = `<g>
+        <path d="M${dx} ${cy - 25} L${dx + 24} ${cy + 24} L${dx - 24} ${cy + 24} Z" fill="#fff" stroke="#6b2a24" stroke-width="3" stroke-linejoin="round" />
+        <path d="M${dx - 8} ${cy - 2} Q${dx - 9} ${cy - 15} ${dx + 1} ${cy - 20} Q${dx + 9} ${cy - 12} ${dx + 5} ${cy - 2} Q${dx - 2} ${cy - 5} ${dx - 8} ${cy - 2} Z" fill="#5a9a4a" />
+        <text x="${dx}" y="${cy + 12}" text-anchor="middle" font-family="${FONT_SANS}" font-weight="800" font-size="11" fill="#1b2340">DAC</text>
+        <line x1="${dx - 12}" y1="${cy + 17}" x2="${dx + 12}" y2="${cy + 17}" stroke="#8b93a5" stroke-width="0.8" />
+        <line x1="${dx - 10}" y1="${cy + 20}" x2="${dx + 10}" y2="${cy + 20}" stroke="#8b93a5" stroke-width="0.8" />
+      </g>`
+
+  return `${iso}\n      ${iaf}\n      ${dac}`
+}
+
 export function createCertificateHtml(certificate: PrintableCertificate, autoPrint = false): string {
   const typeRaw = certificate.type || "Completion"
   const type = escapeHtml(typeRaw)
@@ -120,26 +203,24 @@ export function createCertificateHtml(certificate: PrintableCertificate, autoPri
   const issuedRaw = formatDate(certificate.issuedDate)
   const courseStartRaw = formatDate(certificate.courseStartDate)
   const courseEndRaw = formatDate(certificate.courseEndDate)
-  const issuedByRaw = (certificate.issuedBy || "M. NADIYA").toUpperCase()
-
   const title = escapeHtml(CERTIFICATE_HEADING)
 
   const titleText = CERTIFICATE_HEADING
-  const titleFit = fitText(titleText, 560, 42, 24, 0.42)
+  const titleFit = fitText(titleText, 560, 46, 26, 0.42)
 
   // Both dates share one size so they look identical.
   const dateFit = Math.min(
-    Number(fitText(courseStartRaw, 240, 19, 10, 0.6).size),
-    Number(fitText(courseEndRaw, 240, 19, 10, 0.6).size)
+    Number(fitText(courseStartRaw, 250, 19, 10, 0.6).size),
+    Number(fitText(courseEndRaw, 250, 19, 10, 0.6).size)
   )
 
   // ---- Body rows (baselines) ----
-  const Y0 = 276
+  const Y0 = 282
   const STEP = 46
   const y = (i: number) => Y0 + STEP * i
 
   // Row 0: Roll no
-  const t0 = "Roll. No."
+  const t0 = "Roll No."
   const r0a = L
   const r0b = r0a + width(t0)
 
@@ -154,30 +235,40 @@ export function createCertificateHtml(certificate: PrintableCertificate, autoPri
   const r2a = L + width(t2a)
   const r2b = R - width(t2b)
 
-  // Row 3: Course + "He / She having successfully completed"
-  const t3 = "He / She having successfully completed"
+  // Row 3: Course + "He / She has successfully completed"
+  const t3 = "He / She has successfully completed"
   const r3a = R - width(t3)
 
   // Row 4: full-width justified line
-  const t4 = "the prescribed course of study in Theory and Practicals at our Institute in Ramanthapur conducted from"
+  const t4 = "the prescribed course of study in Theory and Practicals at our Institute in Ramanthapur, conducted from"
 
   // Row 5: dates + sentence
-  const t5 = "and having passed the final Examination"
+  const t5 = "and has passed the final Examination"
   const t5w = width(t5)
-  const gapTo = 22 + GAP * 4 // "to"
+  const gapTo = 26 + GAP * 4 // "to"
   const dateRuleW = Math.round((R - L - t5w - gapTo - 14) / 2)
   const d1a = L
   const d1b = d1a + dateRuleW
   const toX = d1b + GAP + 2
-  const d2a = toX + 22 + GAP + 2
+  const d2a = toX + 26 + GAP + 2
   const d2b = d2a + dateRuleW
   const t5x = R - t5w
 
   // Row 6: Division
-  const t6a = "and placed in"
+  const t6a = "and is placed in"
   const t6b = "Division."
   const r6a = L + width(t6a)
   const r6b = R - width(t6b)
+
+  // Photo box (inset from the frame, right edge aligned with body text)
+  const PW = 132
+  const PH = 170
+  const PX = 926
+  const PY = 78
+
+  // Signature row: same row as the accreditation logos (logos centred at y=694)
+  const LOGO_CY = 694
+  const SIG_LINE = 666
 
   const printScript = autoPrint
     ? `<script>
@@ -186,7 +277,7 @@ export function createCertificateHtml(certificate: PrintableCertificate, autoPri
   function go() { if (done) return; done = true; window.print(); }
   if (document.fonts && document.fonts.load) {
     Promise.all([
-      document.fonts.load("italic 700 22px 'Cormorant Garamond'"),
+      document.fonts.load("italic 700 18px 'Cormorant Garamond'"),
       document.fonts.load("700 18px 'Cormorant Garamond'"),
       document.fonts.load("600 13px Montserrat"),
       document.fonts.load("700 13px Montserrat"),
@@ -219,13 +310,13 @@ export function createCertificateHtml(certificate: PrintableCertificate, autoPri
   <style>
     ${fontImport}
     * { box-sizing: border-box; }
-    @page { size: A4 landscape; margin: 0; }
+    @page { size: 297mm 210mm; margin: 0; }
     html, body { width: 100%; min-height: 100%; margin: 0; padding: 0; }
     body {
       display: flex;
       align-items: center;
       justify-content: center;
-      background: #eef1f5;
+      background: #fff;
       color: #1b2340;
       font-family: 'Montserrat', Arial, Helvetica, sans-serif;
     }
@@ -238,7 +329,7 @@ export function createCertificateHtml(certificate: PrintableCertificate, autoPri
     }
     svg { display: block; width: 100%; height: 100%; }
     .label { font-family: ${FONT_SERIF}; font-style: italic; font-weight: 700; fill: #1b2340; }
-    .value { font-family: ${FONT_SERIF}; font-style: normal; font-weight: 700; fill: #1d2a55; stroke: #1d2a55; stroke-width: 0.18px; paint-order: stroke fill; font-variant-numeric: lining-nums; }
+    .value { font-family: ${FONT_SERIF}; font-style: normal; font-weight: 700; fill: #1d2a55; stroke: #1d2a55; stroke-width: 0.18px; paint-order: stroke fill; font-variant-numeric: lining-nums; letter-spacing: 0.4px; }
     @media print {
       html, body { width: 297mm; height: 210mm; min-height: 0; overflow: hidden; background: #fff; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
       body { display: block; }
@@ -259,48 +350,44 @@ export function createCertificateHtml(certificate: PrintableCertificate, autoPri
       <rect x="24" y="24" width="${W - 48}" height="${H - 48}" fill="none" stroke="#b8923f" stroke-width="1.4" />
       <rect x="30" y="30" width="${W - 60}" height="${H - 60}" fill="none" stroke="#b8923f" stroke-width="0.5" />
 
-      <!-- Faint watermark seal -->
-      <g transform="translate(${CX} 420) scale(3.9) translate(-60 -60)" opacity="0.06" fill="#1d2a55">
-        <circle cx="60" cy="60" r="58" fill="none" stroke="#1d2a55" stroke-width="2.2" />
-        <circle cx="60" cy="60" r="35.5" fill="none" stroke="#1d2a55" stroke-width="1.6" />
-        <text font-family="Montserrat, Arial, Helvetica, sans-serif" font-weight="700" font-size="6.4" letter-spacing="0.6">
+      <!-- Crisp watermark seal -->
+      <g transform="translate(${CX} 408) scale(3.7) translate(-60 -60)" opacity="0.2" fill="#b8923f">
+        <circle cx="60" cy="60" r="58" fill="none" stroke="#b8923f" stroke-width="0.7" />
+        <circle cx="60" cy="60" r="55" fill="none" stroke="#b8923f" stroke-width="0.3" />
+        <circle cx="60" cy="60" r="35.5" fill="none" stroke="#b8923f" stroke-width="0.7" />
+        <circle cx="60" cy="60" r="33" fill="none" stroke="#b8923f" stroke-width="0.3" />
+        <text font-family="Montserrat, Arial, Helvetica, sans-serif" font-weight="700" font-size="6" letter-spacing="0.9">
           <textPath href="#ringTop" startOffset="50%" text-anchor="middle">THE NEW GENERATION COMPUTERS</textPath>
         </text>
-        <text font-family="Montserrat, Arial, Helvetica, sans-serif" font-weight="700" font-size="5.6" letter-spacing="0.8">
-          <textPath href="#ringBottom" startOffset="50%" text-anchor="middle">RAMANTHAPUR • HYDERABAD</textPath>
+        <text font-family="Montserrat, Arial, Helvetica, sans-serif" font-weight="700" font-size="4.8" letter-spacing="0.8">
+          <textPath href="#ringBottom" startOffset="50%" text-anchor="middle">ISO 9001:2015 • HYDERABAD</textPath>
         </text>
-        <text x="60" y="68" text-anchor="middle" font-family="'Playfair Display', Georgia, serif" font-weight="800" font-size="15">TNGC</text>
+        <text x="60" y="64" text-anchor="middle" font-family="'Playfair Display', Georgia, serif" font-weight="800" font-size="15" letter-spacing="1">TNGC</text>
+        <path d="M54 46 L60 40 L66 46 L60 52 Z" />
       </g>
 
-      <!-- Top-right: round seal (centred at 940,95, mirrors the logo) -->
-      <g transform="translate(887 42) scale(0.88)">
-        <circle cx="60" cy="60" r="58" fill="#1d2a55" />
-        <circle cx="60" cy="60" r="55" fill="none" stroke="#b8923f" stroke-width="1" />
-        <circle cx="60" cy="60" r="35.5" fill="#fff" stroke="#b8923f" stroke-width="1.4" />
-        <circle cx="60" cy="60" r="32.5" fill="none" stroke="#1d2a55" stroke-width="0.6" />
-        <text fill="#fff" font-family="Montserrat, Arial, Helvetica, sans-serif" font-weight="700" font-size="6.4" letter-spacing="0.6">
-          <textPath href="#ringTop" startOffset="50%" text-anchor="middle">THE NEW GENERATION COMPUTERS</textPath>
-        </text>
-        <text fill="#fff" font-family="Montserrat, Arial, Helvetica, sans-serif" font-weight="700" font-size="5.6" letter-spacing="0.8">
-          <textPath href="#ringBottom" startOffset="50%" text-anchor="middle">RAMANTHAPUR • HYDERABAD</textPath>
-        </text>
-        <circle cx="15.6" cy="71.9" r="1.8" fill="#b8923f" />
-        <circle cx="104.4" cy="71.9" r="1.8" fill="#b8923f" />
-        <polygon points="60,40 61.41,44.06 65.71,44.15 62.28,46.74 63.53,50.85 60,48.4 56.47,50.85 57.72,46.74 54.29,44.15 58.59,44.06" fill="#b8923f" />
-        <text x="60" y="68" text-anchor="middle" font-family="'Playfair Display', Georgia, serif" font-weight="800" font-size="15" fill="#1d2a55" letter-spacing="0.5">TNGC</text>
-        <path d="M36 66 Q42 86 60 88 Q78 86 84 66" fill="none" stroke="#b8923f" stroke-width="1.4" stroke-linecap="round" />
+      <!-- Corner ornaments -->
+      <g fill="#b8923f">
+        <path d="M24 18 L30 24 L24 30 L18 24 Z" />
+        <path d="M${W - 24} 18 L${W - 18} 24 L${W - 24} 30 L${W - 30} 24 Z" />
+        <path d="M24 ${H - 30} L30 ${H - 24} L24 ${H - 18} L18 ${H - 24} Z" />
+        <path d="M${W - 24} ${H - 30} L${W - 18} ${H - 24} L${W - 24} ${H - 18} L${W - 30} ${H - 24} Z" />
       </g>
+
+      <!-- 35 × 45 mm passport-photo box (1123px = 297mm → 3.781 px/mm → 132.3 × 170.1 px) -->
+      <rect x="${PX}" y="${PY}" width="${PW}" height="${PH}" fill="#fff" stroke="#8b93a5" stroke-width="1.2" stroke-dasharray="5 4" />
 
       <!-- Header -->
-      <text x="${CX}" y="100" text-anchor="middle" font-family="'Playfair Display', 'Times New Roman', Georgia, serif" font-weight="800" font-size="34" fill="#1d2a55" textLength="620" lengthAdjust="spacingAndGlyphs">${INSTITUTE_NAME}</text>
-      <text x="${CX}" y="128" text-anchor="middle" font-family="Montserrat, Arial, Helvetica, sans-serif" font-weight="600" font-size="13" fill="#1b2340" textLength="390" lengthAdjust="spacingAndGlyphs">AN ISO 9001:2015 CERTIFIED ORGANIZATION</text>
-      <text x="${CX}" y="150" text-anchor="middle" font-family="Montserrat, Arial, Helvetica, sans-serif" font-weight="500" font-size="12.5" fill="#1b2340" textLength="330" lengthAdjust="spacing">(Recognised By Govt. of Telangana - 3106/16)</text>
-      <text x="${CX}" y="212" text-anchor="middle" font-family="${FONT_SCRIPT}" font-size="${titleFit.size}"${titleFit.squeeze} fill="#a61d33">${escapeHtml(titleText)}</text>
+      <text x="${CX}" y="104" text-anchor="middle" font-family="'Playfair Display', 'Times New Roman', Georgia, serif" font-weight="800" font-size="34" fill="#1d2a55" textLength="620" lengthAdjust="spacingAndGlyphs">${INSTITUTE_NAME}</text>
+      <text x="${CX}" y="134" text-anchor="middle" font-family="${FONT_SANS}" font-weight="600" font-size="13" fill="#1b2340" textLength="400" lengthAdjust="spacing">AN ISO 9001:2015 CERTIFIED ORGANIZATION</text>
+      <text x="${CX}" y="158" text-anchor="middle" font-family="${FONT_SANS}" font-weight="500" font-size="12" fill="#4a5270" textLength="340" lengthAdjust="spacing">(Recognised By Govt. of Telangana - 3106/16)</text>
+      <line x1="${CX - 60}" y1="176" x2="${CX + 60}" y2="176" stroke="#b8923f" stroke-width="1" />
+      <text x="${CX}" y="228" text-anchor="middle" font-family="${FONT_SCRIPT}" font-size="${titleFit.size}"${titleFit.squeeze} fill="#a61d33">${escapeHtml(titleText)}</text>
 
       <!-- Row 0: Roll no -->
       ${label(r0a, r0b, y(0), t0)}
       ${rule(r0b + GAP, 560, y(0))}
-      ${valueText(credentialRaw, r0b + GAP, 560, y(0), 19, 10, 0.64)}
+      ${valueText(credentialRaw, r0b + GAP, 560, y(0), 21, 10, 0.64)}
 
       <!-- Row 1: Student -->
       ${label(r1a, r1b, y(1), t1)}
@@ -324,7 +411,7 @@ export function createCertificateHtml(certificate: PrintableCertificate, autoPri
       <!-- Row 5: dates + sentence -->
       ${rule(d1a, d1b, y(5))}
       <text class="value" x="${(d1a + d1b) / 2}" y="${y(5)}" text-anchor="middle" font-size="${dateFit}">${escapeHtml(courseStartRaw)}</text>
-      ${label(toX, toX + 22, y(5), "to")}
+      <text class="label" x="${(d1b + d2a) / 2}" y="${y(5)}" text-anchor="middle" font-size="${LABEL_SIZE}">to</text>
       ${rule(d2a, d2b, y(5))}
       <text class="value" x="${(d2a + d2b) / 2}" y="${y(5)}" text-anchor="middle" font-size="${dateFit}">${escapeHtml(courseEndRaw)}</text>
       ${label(t5x, R, y(5), t5)}
@@ -335,32 +422,18 @@ export function createCertificateHtml(certificate: PrintableCertificate, autoPri
       ${valueText(divisionRaw, r6a + GAP, r6b - GAP, y(6))}
       ${label(r6b, R, y(6), t6b)}
 
-      <!-- Date / Place -->
-      <text x="${L}" y="618" font-family="Montserrat, Arial, Helvetica, sans-serif" font-weight="700" font-size="12" fill="#1b2340" stroke="#1b2340" stroke-width="0.12px" paint-order="stroke fill">Date :</text>
-      <text x="${L}" y="650" font-family="Montserrat, Arial, Helvetica, sans-serif" font-weight="700" font-size="12" fill="#1b2340" stroke="#1b2340" stroke-width="0.12px" paint-order="stroke fill">Place :</text>
-      <line x1="154" y1="621" x2="300" y2="621" stroke="#1b2340" stroke-width="0.9" />
-      <line x1="154" y1="653" x2="300" y2="653" stroke="#1b2340" stroke-width="0.9" />
-      ${valueText(issuedRaw, 154, 300, 618, 14, 9, 0.6)}
-      ${valueText(placeRaw, 154, 300, 650, 14, 9, 0.6)}
+      <!-- Date (directly below main content) -->
+      ${metaRow("Date :", issuedRaw, y(7))}
 
-      <!-- Signatures + stamp -->
-      <g transform="translate(0 14)">
-        <g transform="translate(335.5 600)">
-          <path d="${CERTIFICATE_SIGNATURE_PATHS.director}" fill="#1a2a9c" fill-rule="evenodd" />
-        </g>
-        <text x="412.5" y="700" text-anchor="middle" font-family="Montserrat, Arial, Helvetica, sans-serif" font-weight="700" font-size="14" fill="#1b2340">M. NADIYA</text>
-        <text x="412.5" y="717" text-anchor="middle" font-family="Montserrat, Arial, Helvetica, sans-serif" font-weight="500" font-size="10.5" fill="#1b2340">Centre Director</text>
+      <!-- Signatures (beside the accreditation logos, same row) -->
+      ${signatureBlock(300, 500, SIG_LINE, "M. Nadiya", "Director")}
+      ${signatureBlock(570, 770, SIG_LINE, "M. Eswara Rao", "Trainer")}
 
-        <g transform="translate(477.5 606) scale(0.85)">
-          <path d="${CERTIFICATE_STAMP_PATH}" fill="#2a4fa8" fill-rule="evenodd" opacity="0.88" />
-        </g>
+      <!-- Accreditation logos (bottom-right corner) -->
+      ${accreditationLogos(R - 224, LOGO_CY)}
 
-        <g transform="translate(585.5 600)">
-          <path d="${CERTIFICATE_SIGNATURE_PATHS.trainer}" fill="#1a2a9c" fill-rule="evenodd" />
-        </g>
-        <text x="710.5" y="700" text-anchor="middle" font-family="Montserrat, Arial, Helvetica, sans-serif" font-weight="700" font-size="14" fill="#1b2340">${escapeHtml(issuedByRaw)}</text>
-        <text x="710.5" y="717" text-anchor="middle" font-family="Montserrat, Arial, Helvetica, sans-serif" font-weight="500" font-size="10.5" fill="#1b2340">Trainer</text>
-      </g>
+      <!-- Footer -->
+      ${footerBar()}
     </svg>
   </main>
   ${printScript}

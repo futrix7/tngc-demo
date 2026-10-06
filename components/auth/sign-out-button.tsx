@@ -7,6 +7,15 @@ import { useAuthState } from "@/hooks/use-auth"
 import { ROLE_LOGIN, type AuthRole } from "@/lib/auth/roles"
 import { useToast } from "@/components/ui/sonner"
 import { cn } from "@/lib/utils"
+import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 
 /**
  * Sign-out control for a portal.
@@ -31,6 +40,7 @@ export function SignOutButton({
   const { toast } = useToast()
   const { signOut } = useAuthState()
   const [busy, setBusy] = useState(false)
+  const [dialogOpen, setDialogOpen] = useState(false)
 
   async function handleSignOut() {
     if (busy) return
@@ -48,6 +58,7 @@ export function SignOutButton({
         return
       }
 
+      setDialogOpen(false)
       router.replace(ROLE_LOGIN[role])
       router.refresh()
     } catch (err) {
@@ -59,18 +70,55 @@ export function SignOutButton({
   }
 
   return (
-    <button
-      type="button"
-      onClick={handleSignOut}
-      disabled={busy}
-      aria-busy={busy}
-      className={cn(
-        "flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:pointer-events-none disabled:opacity-60",
-        className
-      )}
-    >
-      {busy ? <Loader2 className="size-4 animate-spin" /> : <LogOut className="size-4" />}
-      {busy ? "Signing out..." : "Sign Out"}
-    </button>
+    <>
+      <button
+        type="button"
+        onClick={() => setDialogOpen(true)}
+        disabled={busy}
+        aria-busy={busy}
+        className={cn(
+          "flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:pointer-events-none disabled:opacity-60",
+          className
+        )}
+      >
+        {busy ? <Loader2 className="size-4 animate-spin" /> : <LogOut className="size-4" />}
+        {busy ? "Signing out..." : "Sign Out"}
+      </button>
+
+      <Dialog
+        open={dialogOpen}
+        onOpenChange={(open) => {
+          if (!busy) setDialogOpen(open)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Sign out?</DialogTitle>
+            <DialogDescription>
+              You will be signed out of this device. You can sign back in anytime.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setDialogOpen(false)}
+              disabled={busy}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={handleSignOut}
+              disabled={busy}
+            >
+              {busy && <Loader2 className="size-4 animate-spin" />}
+              {busy ? "Signing out..." : "Sign out"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }

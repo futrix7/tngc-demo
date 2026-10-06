@@ -47,6 +47,9 @@ import { localDate } from "@/lib/local-date"
 import { useToast } from "@/components/ui/sonner"
 import { useStudent } from "../layout"
 import { PaymentReceiptButton } from "@/components/shared/payment-receipt-button"
+import { PrintButton } from "@/components/shared/print-button"
+import { buildStudentStatement } from "@/lib/fee-print"
+import type { PrintReport } from "@/lib/print-report"
 
 interface Installment {
   id: string
@@ -70,6 +73,7 @@ interface Installment {
 interface CollectionRecord {
   id: string
   installmentLabel: string
+  course: string
   amount: number
   collectedDate: string
   method: string
@@ -170,7 +174,9 @@ export default function StudentInstallmentsPage() {
 
       const { data: historyRows, error: historyError } = await supabase
         .from("payments")
-        .select("id, amount, payment_date, method, description")
+        // course_slug is read so the printed statement can say which course each
+        // collection was for, instead of an unlabelled list of figures.
+        .select("id, amount, payment_date, method, description, course_slug")
         .eq("student_id", student.id)
         .eq("status", "Paid")
         .order("payment_date", { ascending: false })
@@ -183,14 +189,6 @@ export default function StudentInstallmentsPage() {
       }
 
       setCollected((historyRows ?? []).reduce((sum, payment) => sum + Number(payment.amount), 0))
-      setCollections((historyRows ?? []).map((payment) => ({
-        id: payment.id,
-        installmentLabel: payment.description ?? "Fee Payment",
-        amount: payment.amount,
-        collectedDate: payment.payment_date,
-        method: payment.method,
-      })))
-
       const paidBy: Record<string, number> = {}
       const claimedBy: Record<string, { amount: number; ids: string[]; reference: string }> = {}
       for (const payment of payRows ?? []) {
@@ -209,6 +207,19 @@ export default function StudentInstallmentsPage() {
 
       const slugByFee = new Map(currentFees.map((fee) => [fee.id, fee.course_slug]))
       const nameBySlug = new Map((coursesResult.data ?? []).map((c) => [c.slug, c.short_name || c.name]))
+      const nameForSlug = (slug: string | null) =>
+        slug ? nameBySlug.get(slug) ?? slug : "Fee Payment"
+
+      // Set after the course lookup, so each collection can be labelled with the
+      // course it was made against rather than left as a bare figure.
+      setCollections((historyRows ?? []).map((payment) => ({
+        id: payment.id,
+        installmentLabel: payment.description ?? "Fee Payment",
+        course: nameForSlug(payment.course_slug),
+        amount: payment.amount,
+        collectedDate: payment.payment_date,
+        method: payment.method,
+      })))
 
       setInstallments(instRows.map((row) => {
         const amount = Number(row.amount)
@@ -492,6 +503,43 @@ export default function StudentInstallmentsPage() {
     }
   }
 
+  /**
+   * The whole of this student's fee on one sheet.
+   *
+   * Built from the rows already on screen rather than a fresh query: they were
+   * fetched moments ago from the same source, and the person printing is looking
+   * at them. Re-querying here would risk printing a schedule that disagrees with
+   * the numbers above the button.
+   */
+  function buildStatement(): PrintReport {
+    return buildStudentStatement({
+      title: "Fee Statement",
+      subtitle: "Installment schedule and payment history",
+      studentName: student?.name ?? "Unknown",
+      studentId: student?.id ?? null,
+      installments: installments.map((inst) => ({
+        course: inst.course,
+        label: inst.label,
+        dueDate: inst.dueDate,
+        paidDate: inst.paidDate,
+        amount: inst.amount,
+        paidAmount: inst.paidAmount,
+        awaitingAmount: inst.pendingClaimAmount,
+        balance: inst.remainingBalance,
+        status: inst.status,
+      })),
+      payments: collections.map((record) => ({
+        id: record.id,
+        course: record.course,
+        against: record.installmentLabel,
+        date: record.collectedDate,
+        amount: record.amount,
+        method: record.method,
+        status: "Paid",
+      })),
+    })
+  }
+
   return (
     <div className="space-y-4">
       {/* Summary Cards */}
@@ -519,6 +567,12 @@ export default function StudentInstallmentsPage() {
             </p>
           </CardContent>
         </Card>
+      </div>
+      <div className="flex justify-end">
+        <PrintButton
+          getReport={buildStatement}
+          title="Print this student's full fee statement"
+        />
       </div>
       {loadError && (
         <Card className="border-destructive/40">

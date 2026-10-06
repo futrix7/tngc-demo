@@ -16,6 +16,9 @@ import { UpiPayBlock } from "@/components/student/upi-pay-block"
 import { parsePaymentAmount } from "@/lib/amount-split"
 import { getInstallmentPaymentTotals, getRemainingInstallmentBalance } from "@/lib/payment-balances"
 import { PaymentReceiptButton } from "@/components/shared/payment-receipt-button"
+import { PrintButton } from "@/components/shared/print-button"
+import { buildStudentStatement } from "@/lib/fee-print"
+import type { PrintReport } from "@/lib/print-report"
 
 interface Installment {
   id: string
@@ -696,6 +699,35 @@ export default function StudentFee() {
     )
   }
 
+  /**
+   * The student's own copy of the fee, on one sheet.
+   *
+   * Built from `feeDetails` — the rows already rendered above the button — so the
+   * printout is exactly what is on screen. This is the same statement the counter
+   * can print from the admin side, which is the point: one template, so a student
+   * and the institute are never looking at two different descriptions of the same
+   * balance.
+   */
+  function buildStatement(): PrintReport {
+    return buildStudentStatement({
+      title: "Fee Statement",
+      subtitle: "Installment schedule and payment progress",
+      studentName: studentName || "Student",
+      studentId,
+      installments: feeDetails.installments.map((inst) => ({
+        course: inst.courseName,
+        label: inst.label,
+        dueDate: inst.dueDate,
+        paidDate: inst.paidDate,
+        amount: inst.amount,
+        paidAmount: inst.paidAmount,
+        awaitingAmount: inst.pendingClaimAmount,
+        balance: inst.remainingBalance,
+        status: inst.status,
+      })),
+    })
+  }
+
   return (
     <div className="mx-auto max-w-5xl space-y-6 p-4 sm:p-6 lg:px-8 lg:py-10">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -1166,7 +1198,13 @@ export default function StudentFee() {
       {/* Installments */}
       <Card>
         <CardContent className="p-5 sm:p-6 lg:p-8">
-          <h2 className="mb-4 text-base font-semibold lg:mb-6 lg:text-xl">Installment Schedule</h2>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 lg:mb-6">
+            <h2 className="text-base font-semibold lg:text-xl">Installment Schedule</h2>
+            <PrintButton
+              getReport={buildStatement}
+              title="Print your full fee statement"
+            />
+          </div>
           <div className="space-y-3">
             {feeDetails.installments.map((inst) => (
               <div

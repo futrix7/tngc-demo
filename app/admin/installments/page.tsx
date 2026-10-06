@@ -45,6 +45,9 @@ import { FilterDialog, type FilterField, type FilterValues } from "@/components/
 import { CollectDialog, type CollectibleInstallment } from "@/components/admin/collect-dialog"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { PaymentReceiptButton } from "@/components/shared/payment-receipt-button"
+import { PrintButton } from "@/components/shared/print-button"
+import { printDate, type PrintReport } from "@/lib/print-report"
+import { buildFeeRegister, type StatementInstallmentRow } from "@/lib/fee-print"
 
 interface Installment {
   id: string
@@ -599,6 +602,212 @@ export default function InstallmentsPage() {
     },
   ]
 
+  /** Turns one parsed row into the shape the shared print template expects. */
+  function toStatementRow(inst: Installment): StatementInstallmentRow {
+    return {
+      student: inst.studentName,
+      course: inst.course,
+      label: inst.label,
+      dueDate: inst.dueDate,
+      paidDate: inst.paidDate,
+      amount: inst.amount,
+      paidAmount: inst.paidAmount,
+      awaitingAmount: inst.pendingClaimAmount,
+      balance: inst.remainingBalance,
+      status: inst.status,
+    }
+  }
+
+  /**
+   * Every installment matching the current search and filter — not just the page
+   * on screen. A printout of ten rows labelled "all installments" would be worse
+   * than no printout, so this re-runs the same query the table used.
+   */
+  async function loadAllInstallments(): Promise<Installment[]> {
+    const safeSearch = search.trim().slice(0, 80).replace(/[^\p{L}\p{N}\s@._+-]/gu, "")
+    type InstallmentRow = {
+      id: string
+      fee_id: string
+      label: string
+      installment_no: number | null
+      amount: number
+      due_date: string
+      paid_date: string | null
+      status: string
+      statement_serial: number | null
+      fees: {
+        student_id: string
+        course_slug: string | null
+        students: { full_name: string | null; branch_id: string | null; email: string | null; phone: string | null }[]
+      }[] | null
+    }
+    const collected: InstallmentRow[] = []
+    let offset = 0
+
+    while (true) {
+      let query = supabase
+        .from("fee_installments")
+        .select("id, fee_id, label, installment_no, amount, due_date, paid_date, status, statement_serial, fees!inner(student_id, course_slug, students!inner(full_name, branch_id, email, phone))")
+        .order("status", { ascending: false })
+        .order("due_date", { ascending: true })
+
+      if (safeSearch) {
+        query = query.or(`label.ilike.%${safeSearch}%,fees.course_slug.ilike.%${safeSearch}%,fees.students.full_name.ilike.%${safeSearch}%`)
+      }
+      if (filter === "pending") query = query.in("status", ["Pending", "Partial"])
+      else if (filter === "partial") query = query.eq("status", "Partial")
+      else if (filter === "paid") query = query.eq("status", "Paid")
+
+      if (periodType === "date" && periodValue) query = query.eq("due_date", periodValue)
+      if (periodType === "month" && periodValue) {
+        const [year, month] = periodValue.split("-").map(Number)
+        const lastDay = new Date(year, month, 0).getDate()
+        query = query.gte("due_date", `${periodValue}-01`).lte("due_date", `${periodValue}-${String(lastDay).padStart(2, "0")}`)
+      }
+      if (periodType === "quarter" && periodValue) {
+        const [year, quarter] = periodValue.split("-Q").map(Number)
+        const firstMonth = (quarter - 1) * 3 + 1
+        const lastDay = new Date(year, firstMonth + 2, 0).getDate()
+        query = query.gte("due_date", `${year}-${String(firstMonth).padStart(2, "0")}-01`)
+          .lte("due_date", `${year}-${String(firstMonth + 2).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`)
+      }
+
+      const { data: rows, error } = await query.range(offset, offset + 999)
+      if (error) throw error
+      if (!rows || rows.length === 0) break
+      collected.push(...rows)
+      if (rows.length < 1000) break
+      offset += 1000
+    }
+
+    if (collected.length === 0) return []
+
+    const studentIds = [...new Set(collected
+      .map((row) => unwrapFirst(row.fees)?.student_id ?? null)
+      .filter(Boolean))] as string[]
+    const courseSlugs = [...new Set(collected
+      .map((row) => unwrapFirst(row.fees)?.course_slug ?? null)
+      .filter(Boolean))] as string[]
+
+    const [studentsResult, coursesResult, ledgerResult] = await Promise.all([
+      supabase.from("students").select("id, full_name, branch_id, email, phone").in("id", studentIds),
+      supabase.from("courses").select("slug, name, short_name").in("slug", courseSlugs),
+      supabase
+        .from("payments")
+        .select("installment_id, amount, status")
+        .in("installment_id", collected.map((row) => row.id))
+        .in("status", ["Paid", "Pending"]),
+    ])
+    if (studentsResult.error || coursesResult.error || ledgerResult.error) {
+      throw studentsResult.error ?? coursesResult.error ?? ledgerResult.error
+    }
+
+    const studentsById = new Map((studentsResult.data ?? []).map((student) => [student.id, student]))
+    const coursesBySlug = new Map((coursesResult.data ?? []).map((course) => [course.slug, course.short_name || course.name]))
+
+    const branchIds = [...new Set((studentsResult.data ?? []).map((s) => s.branch_id).filter(Boolean))] as string[]
+    const { data: branchRows } = branchIds.length
+      ? await supabase.from("branches").select("id, name").in("id", branchIds)
+      : { data: [] as { id: string; name: string }[] }
+    const branchesById = new Map((branchRows ?? []).map((branch) => [branch.id, branch.name]))
+
+    // The same ledger rule the table uses, so a printed line and the row beside
+    // it can never disagree about what has been collected.
+    const paidByInstallment = new Map<string, number>()
+    const pendingByInstallment = new Map<string, number>()
+    for (const payment of ledgerResult.data ?? []) {
+      if (!payment.installment_id) continue
+      const bucket = payment.status === "Paid" ? paidByInstallment : pendingByInstallment
+      bucket.set(payment.installment_id, (bucket.get(payment.installment_id) ?? 0) + Number(payment.amount))
+    }
+
+    return collected.map((row) => {
+      const fee = unwrapFirst(row.fees)
+      const studentInfo = fee ? unwrapFirst(fee.students as StudentMapEntry[] | StudentMapEntry | null) : null
+      const studentId = fee?.student_id ?? "N/A"
+      const courseSlug = fee?.course_slug ?? ""
+      const student = studentsById.get(studentId) ?? (studentInfo ? {
+        full_name: studentInfo.full_name ?? null,
+        branch_id: studentInfo.branch_id ?? null,
+        email: studentInfo.email ?? null,
+        phone: studentInfo.phone ?? null,
+      } : null)
+
+      const amount = Number(row.amount)
+      const ledgerPaid = paidByInstallment.get(row.id) ?? 0
+      const paidAmount = Math.min(amount, row.status === "Paid" ? Math.max(ledgerPaid, amount) : ledgerPaid)
+      const balance = Math.max(0, Number((amount - paidAmount).toFixed(2)))
+      const awaitingAmount = Math.min(balance, pendingByInstallment.get(row.id) ?? 0)
+      const remainingBalance = Math.max(0, Number((balance - awaitingAmount).toFixed(2)))
+
+      return {
+        id: row.id,
+        // 0 rather than null: the receipt falls back to the raw record id when
+        // there is no serial, and `0` is what keeps that check simple.
+        statementSerial: row.statement_serial ?? 0,
+        feeId: row.fee_id,
+        studentId,
+        studentName: student?.full_name ?? "Unknown",
+        studentPhone: student?.phone ?? null,
+        studentEmail: student?.email ?? null,
+        course: coursesBySlug.get(courseSlug) || courseSlug || "N/A",
+        label: row.label,
+        installmentNo: row.installment_no ?? 0,
+        amount,
+        paidAmount,
+        balance,
+        remainingBalance,
+        pendingClaimAmount: awaitingAmount,
+        pendingPaymentIds: [],
+        pendingReference: "",
+        dueDate: row.due_date,
+        paidDate: row.paid_date,
+        status: balance === 0 ? "Paid" : paidAmount > 0 ? "Partial" : "Pending",
+        branch: student ? branchesById.get(student.branch_id ?? "") || "N/A" : "N/A",
+        branchId: student?.branch_id ?? null,
+      }
+    })
+  }
+
+  /** The current filter, in the words the sheet would use for it. */
+  function periodLabel(): string {
+    if (periodType === "date" && periodValue) return printDate(periodValue)
+    if (periodType === "month" && periodValue) {
+      const [year, month] = periodValue.split("-").map(Number)
+      const name = new Date(Date.UTC(year, month - 1, 1)).toLocaleString("en", { month: "long", timeZone: "UTC" })
+      return `${name} ${year}`
+    }
+    if (periodType === "quarter" && periodValue) {
+      const [year, quarter] = periodValue.split("-Q").map(Number)
+      return `Q${quarter} ${year}`
+    }
+    return "All due dates"
+  }
+
+  /** The matching schedule, laid out on one A4 sheet. */
+  async function buildInstallmentRegister(): Promise<PrintReport> {
+    const rows = await loadAllInstallments()
+
+    return buildFeeRegister({
+      title: "Installments",
+      subtitle: "Fee schedule and collection status",
+      meta: [
+        { label: "Due dates", value: periodLabel() },
+        {
+          label: "Status",
+          value: filter === "all"
+            ? "All statuses"
+            : filter === "pending"
+              ? "Pending and partial"
+              : filter === "paid" ? "Paid" : "Partial",
+        },
+        { label: "Search", value: search.trim() || "None" },
+        { label: "Records", value: String(rows.length) },
+      ],
+      installments: rows.map(toStatementRow),
+    })
+  }
+
   async function applyInstallmentFilters(values: FilterValues) {
     const nextStatus = filter
     const nextPeriod = values.period || "all"
@@ -629,6 +838,10 @@ export default function InstallmentsPage() {
           <h1 className="text-2xl font-bold tracking-tight">Installments</h1>
           <p className="text-xs text-muted-foreground">Track and manage student installment payments</p>
         </div>
+        <PrintButton
+          getReport={buildInstallmentRegister}
+          title="Print every installment matching the current search and filter"
+        />
       </div>
 
       <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">

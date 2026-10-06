@@ -9,6 +9,9 @@ import { cn } from "@/lib/utils"
 import { supabase } from "@/lib/supabase"
 import { useStudent } from "../layout"
 import { PaymentReceiptButton } from "@/components/shared/payment-receipt-button"
+import { PrintButton } from "@/components/shared/print-button"
+import { buildStudentStatement } from "@/lib/fee-print"
+import type { PrintReport } from "@/lib/print-report"
 
 interface Installment {
   id: string
@@ -173,6 +176,34 @@ export default function StudentFeePage() {
     return acc
   }, {})
 
+  /**
+   * The whole fee on one sheet, built from the rows already on screen.
+   *
+   * No payment history here to append — this screen is the schedule, and the
+   * ledger lives on the payments tab. Passing nothing for `payments` keeps the
+   * printed statement to the schedule plus its totals, rather than a second,
+   * separately-queried payment list that could disagree with this one.
+   */
+  function buildStatement(): PrintReport {
+    return buildStudentStatement({
+      title: "Fee Statement",
+      subtitle: "Installment schedule and payment progress",
+      studentName: student?.name ?? "Student",
+      studentId: student?.id ?? null,
+      installments: installments.map((inst) => ({
+        course: inst.course,
+        label: inst.label,
+        dueDate: inst.dueDate,
+        paidDate: inst.paidDate,
+        amount: inst.amount,
+        paidAmount: inst.paidAmount,
+        awaitingAmount: inst.pendingClaimAmount,
+        balance: inst.remainingBalance,
+        status: inst.status,
+      })),
+    })
+  }
+
   return (
     <div className="space-y-4">
       {error && (
@@ -180,6 +211,12 @@ export default function StudentFeePage() {
           <CardContent className="p-4 text-sm text-destructive">{error}</CardContent>
         </Card>
       )}
+      <div className="flex justify-end">
+        <PrintButton
+          getReport={buildStatement}
+          title="Print this student's full fee statement"
+        />
+      </div>
       {totalFee === 0 && (
         <Card>
           <CardContent className="p-4 text-sm text-muted-foreground">

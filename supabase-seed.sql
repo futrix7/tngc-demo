@@ -1,69 +1,95 @@
--- Campuses. Fixed ids so this is idempotent, and so a fresh database has the
--- branches in place before any student, payment or expense can reference one.
-INSERT INTO branches (id, name, tag, address, city, is_primary) VALUES
-  ('11111111-1111-4111-8111-111111111111', 'Ramanthapur', 'HQ',   'Main Road, Ramanthapur', 'Ramanthapur', TRUE),
-  ('22222222-2222-4222-8222-222222222222', 'Amberpet',    'BR-2', 'Amberpet Centre',        'Amberpet',    FALSE),
-  ('33333333-3333-4333-8333-333333333333', 'Kodad',      'BR-3', 'Kodad Junction',         'Kodad',       FALSE)
-ON CONFLICT (name) DO NOTHING;
-
-INSERT INTO courses (slug, name, short_name, duration, type, description, full_description, topics, fees, fee_numeric, eligibility, certification, certification_body, popular, highlights, career_opportunities, tools, schedule, batch_size, status) VALUES
-('dca', 'DCA', 'DCA', '40 Days', 'long-term', 'Diploma in Computer Applications', 'The Diploma in Computer Applications (DCA) is a foundational programme designed for students and professionals who want to build strong computer skills.', ARRAY['Basics','Typing Tutor','Windows','MS-Word','MS-Excel','MS-PowerPoint','Internet Level-I'], '₹3,000', 3000, '10th Pass or equivalent', 'Government Recognised Certificate', 'TNGC Institute', false, ARRAY['Hands-on practical training','Small batch sizes','Job-ready skills in 40 days','Free study material'], ARRAY['Data Entry Operator','Office Assistant','Computer Operator','BPO / KPO Executive'], ARRAY['MS-Word','MS-Excel','MS-PowerPoint','Internet Explorer'], 'Weekdays: 9 AM - 11 AM', '15-20 students', 'active'),
-('adca', 'ADCA', 'ADCA', '2 Months', 'long-term', 'Advanced Diploma in Computer Applications', 'The Advanced Diploma in Computer Applications (ADCA) builds upon the DCA curriculum with deeper coverage of MS-Office tools, internet applications, accounting fundamentals, and Tally Prime.', ARRAY['Basics','Typing Tutor','Windows','MS-Office Suite','Internet','Accounting Intro','Tally Prime'], '₹5,000', 5000, '10th Pass or equivalent', 'Government Recognised Certificate', 'TNGC Institute', false, ARRAY['Tally Prime with GST','Advanced Excel & pivot tables','Practical accounting concepts','Placement assistance'], ARRAY['Accounts Assistant','Office Executive','Tally Operator','Inventory Manager'], ARRAY['MS-Office','Tally Prime','Internet','Email'], 'Weekdays: 9 AM - 11 AM', '15-20 students', 'active'),
-('pgdca', 'PGDCA', 'PGDCA', '2 Months', 'long-term', 'Post Graduate Diploma in Computer Applications', 'The Post Graduate Diploma in Computer Applications (PGDCA) is designed for graduates who want to gain advanced computer knowledge.', ARRAY['Basics','Typing Tutor','MS-Office Suite','Internet Concept','C Language'], '₹6,000', 6000, 'Graduate or equivalent', 'Government Recognised Certificate', 'TNGC Institute', false, ARRAY['C Language programming','Advanced MS-Office skills','Internet & web concepts','Industry-relevant curriculum'], ARRAY['Software Trainee','IT Support Executive','Office Automation Specialist','Web Assistant'], ARRAY['MS-Office','C Language Compiler','Internet'], 'Weekdays: 9 AM - 11 AM', '15-20 students', 'active'),
-('pgjpl', 'PGJPL', 'Java Programming', '4 Months', 'long-term', 'Java Programming Language', 'The PGJPL programme is a comprehensive Java development course covering everything from C Language fundamentals to Core Java, Java 8 features, Advanced Java, and database connectivity with JDBC.', ARRAY['C Language','Core Java','Java 8','Advanced Java','DBMS-JDBC'], '₹12,000', 12000, 'Graduate or equivalent', 'Government Recognised Certificate', 'TNGC Institute', false, ARRAY['Java 8+ features (Streams, Lambdas)','Spring basics introduction','Database connectivity with JDBC','Real-world project work'], ARRAY['Java Developer Trainee','Software Developer','Backend Developer','Full Stack Developer (Java)'], ARRAY['VS Code','IntelliJ IDEA','MySQL','Git'], 'Weekdays: 9 AM - 11 AM', '15-20 students', 'active'),
-('pgppl', 'PGPPL', 'Python Programming', '4 Months', 'long-term', 'Python Programming Language', 'The PGPPL programme provides in-depth knowledge of Python programming from fundamentals to advanced concepts.', ARRAY['C Language','Core Python','Advanced Python','Tkinter','DBMS-JDBC'], '₹12,000', 12000, 'Graduate or equivalent', 'Government Recognised Certificate', 'TNGC Institute', false, ARRAY['Core & Advanced Python','GUI development with Tkinter','Database integration','Project-based learning'], ARRAY['Python Developer Trainee','Automation Tester','Data Analyst (Entry Level)','Software Developer'], ARRAY['VS Code','PyCharm','MySQL','Git'], 'Weekdays: 9 AM - 11 AM', '15-20 students', 'active'),
-('python-full-stack', 'Python Full Stack', 'Python Full Stack', '6 Months', 'long-term', 'Complete Python Developer Programme', 'The Python Full Stack Developer Programme is our flagship course covering Core Python, Object-Oriented Programming, Django web framework, HTML/CSS, JavaScript, and a comprehensive live project.', ARRAY['Core Python','OOPS','Django','HTML/CSS','JavaScript','Live Project'], '₹25,000', 25000, '12th Pass or equivalent', 'Government Recognised Certificate + Course Completion', 'TNGC Institute', true, ARRAY['Django REST framework','HTML5, CSS3, JavaScript ES6+','Git & GitHub workflow','2-month live industry project','100% placement assistance'], ARRAY['Python Full Stack Developer','Django Developer','Web Developer','Software Engineer','Freelance Developer'], ARRAY['VS Code','PyCharm','Django','PostgreSQL','Git','HTML/CSS/JS'], 'Weekdays: 9 AM - 12 PM', '15-20 students', 'active'),
-('java-full-stack', 'Java Full Stack', 'Java Full Stack', '6 Months', 'long-term', 'Complete Java Developer Programme', 'The Java Full Stack Developer Programme covers Core Java, Java 8, Spring Boot, HTML/CSS, JavaScript, and a live project.', ARRAY['Core Java','Java 8','Spring Boot','HTML/CSS','JavaScript','Live Project'], '₹25,000', 25000, '12th Pass or equivalent', 'Government Recognised Certificate + Course Completion', 'TNGC Institute', true, ARRAY['Spring Boot & Microservices basics','Java 8+ features','RESTful API development','2-month live industry project','100% placement assistance'], ARRAY['Java Full Stack Developer','Spring Boot Developer','Software Engineer','Backend Developer','Enterprise Application Developer'], ARRAY['IntelliJ IDEA','VS Code','Spring Boot','MySQL','Git','HTML/CSS/JS'], 'Weekdays: 9 AM - 12 PM', '15-20 students', 'active'),
-('adwd', 'A.D.W.D', 'Web Design', '3 Months', 'long-term', 'Advanced Web Designing', 'The Advanced Web Designing programme teaches modern front-end web development including HTML5, CSS3, JavaScript, and Bootstrap.', ARRAY['HTML','CSS','JavaScript','Bootstrap'], '₹8,000', 8000, '10th Pass or equivalent', 'Government Recognised Certificate', 'TNGC Institute', false, ARRAY['Responsive web design','Bootstrap 5 framework','JavaScript DOM manipulation','Portfolio project'], ARRAY['Front-End Developer','Web Designer','UI Developer','Freelance Web Designer'], ARRAY['VS Code','HTML5','CSS3','JavaScript','Bootstrap 5'], 'Weekdays: 9 AM - 11 AM', '15-20 students', 'active')
-ON CONFLICT (slug) DO NOTHING;
-
-INSERT INTO courses (slug, name, short_name, duration, type, description, full_description, topics, fees, fee_numeric, eligibility, certification, certification_body, popular, highlights, career_opportunities, tools, schedule, batch_size, status) VALUES
-('basic-computer', 'Basic', 'Basic', '10 Days', 'short-term', 'Fundamental computer operations and usage', 'A quick introductory course covering the fundamentals of computer operations.', ARRAY['Computer Basics','Mouse & Keyboard','File Management','Windows'], '₹1,000', 1000, 'No prior experience needed', 'Course Completion Certificate', 'TNGC Institute', false, ARRAY['Hands-on practice','Small batch sizes','Beginner friendly'], ARRAY['Foundation for further courses'], ARRAY['Windows OS','Mouse','Keyboard'], 'Weekdays: 9 AM - 10 AM', '10-15 students', 'active'),
-('internet-concept', 'Internet Concept', 'Internet', '10 Days', 'short-term', 'Internet browsing, email, and online safety', 'Learn how to navigate the internet effectively, use email services, and practice online safety.', ARRAY['Web Browsing','Email','Online Safety','Search Techniques'], '₹1,000', 1000, 'Basic computer knowledge', 'Course Completion Certificate', 'TNGC Institute', false, ARRAY['Practical internet skills','Email management','Cyber safety awareness'], ARRAY['Foundation for further courses'], ARRAY['Chrome Browser','Gmail','Google Search'], 'Weekdays: 9 AM - 10 AM', '10-15 students', 'active'),
-('ms-office', 'MS-Office', 'MS-Office', '20 Days', 'short-term', 'Complete Microsoft Office suite training', 'Master the Microsoft Office suite including Word, Excel, PowerPoint, and Outlook.', ARRAY['MS-Word','MS-Excel','MS-PowerPoint','MS-Outlook'], '₹2,500', 2500, 'Basic computer knowledge', 'Course Completion Certificate', 'TNGC Institute', false, ARRAY['All MS-Office applications','Practical exercises','Certificate included'], ARRAY['Office Executive','Data Entry Operator','Admin Assistant'], ARRAY['MS-Word','MS-Excel','MS-PowerPoint','MS-Outlook'], 'Weekdays: 9 AM - 10 AM', '10-15 students', 'active'),
-('tally-prime', 'Tally PRIME', 'Tally', '2 Months', 'short-term', 'Complete Tally Prime with GST', 'Learn Tally Prime from basics to advanced including GST, payroll, and inventory management.', ARRAY['Tally Basics','GST','Payroll','Inventory','Reports'], '₹5,000', 5000, 'Basic computer knowledge', 'Course Completion Certificate', 'TNGC Institute', false, ARRAY['GST compliance','Real-world accounting','Inventory management','Professional certification prep'], ARRAY['Tally Operator','Accounts Executive','Inventory Manager'], ARRAY['Tally Prime','MS-Excel'], 'Weekdays: 9 AM - 11 AM', '10-15 students', 'active'),
-('c-language', 'C Language', 'C', '2 Months', 'short-term', 'C programming language fundamentals', 'Learn C programming from basics to advanced concepts including pointers, structures, and file handling.', ARRAY['C Basics','Control Structures','Functions','Pointers','File Handling'], '₹4,000', 4000, 'Basic computer knowledge', 'Course Completion Certificate', 'TNGC Institute', false, ARRAY['Strong programming foundation','Hands-on coding practice','Interview preparation'], ARRAY['Software Trainee','Programming Tutor','Embedded Systems Junior'], ARRAY['VS Code','Turbo C','GCC Compiler'], 'Weekdays: 9 AM - 11 AM', '10-15 students', 'active'),
-('oracle', 'Oracle', 'Oracle', '2 Months', 'short-term', 'Oracle SQL and PL/SQL database programming', 'Master Oracle database programming including SQL queries, PL/SQL, and database management.', ARRAY['SQL Basics','Advanced SQL','PL/SQL','Database Management'], '₹6,000', 6000, 'Basic computer knowledge', 'Course Completion Certificate', 'TNGC Institute', false, ARRAY['Industry-standard database skills','PL/SQL programming','Real-world projects'], ARRAY['Database Administrator','SQL Developer','Data Analyst'], ARRAY['Oracle Database','SQL Developer','VS Code'], 'Weekdays: 9 AM - 11 AM', '10-15 students', 'active'),
-('advanced-excel', 'Advanced Excel', 'Excel', '15 Days', 'short-term', 'Advanced Microsoft Excel features', 'Master advanced Excel features including pivot tables, VLOOKUP, macros, and data visualization.', ARRAY['Advanced Formulas','Pivot Tables','Macros','Data Visualization','Dashboard Creation'], '₹2,000', 2000, 'Basic MS-Office knowledge', 'Course Completion Certificate', 'TNGC Institute', false, ARRAY['Pivot table mastery','Macro automation','Dashboard creation'], ARRAY['Data Analyst','Reporting Executive','Business Analyst'], ARRAY['MS-Excel','VBA Editor'], 'Weekdays: 9 AM - 10 AM', '10-15 students', 'active'),
-('core-java', 'Core Java', 'Java', '2 Months', 'short-term', 'Core Java programming fundamentals', 'Learn Java programming from basics to advanced OOPS concepts, collections, and exception handling.', ARRAY['Java Basics','OOPS','Collections','Exception Handling','Multithreading'], '₹5,000', 5000, 'Basic computer knowledge', 'Course Completion Certificate', 'TNGC Institute', false, ARRAY['Object-oriented programming','Industry-relevant curriculum','Project-based learning'], ARRAY['Java Developer Trainee','Software Engineer','Backend Developer'], ARRAY['IntelliJ IDEA','VS Code','JDK'], 'Weekdays: 9 AM - 11 AM', '10-15 students', 'active'),
-('advanced-java', 'Advanced Java', 'Adv Java', '2 Months', 'short-term', 'Advanced Java with JDBC and Servlets', 'Learn advanced Java concepts including JDBC, Servlets, JSP, and web application development.', ARRAY['JDBC','Servlets','JSP','Web Applications','Deployment'], '₹6,000', 6000, 'Core Java knowledge', 'Course Completion Certificate', 'TNGC Institute', false, ARRAY['Web application development','Database connectivity','Real-world projects'], ARRAY['Java Web Developer','Full Stack Developer','Backend Developer'], ARRAY['IntelliJ IDEA','Tomcat','MySQL','VS Code'], 'Weekdays: 9 AM - 11 AM', '10-15 students', 'active'),
-('javascript', 'JavaScript', 'JS', '1 Month', 'short-term', 'JavaScript programming fundamentals', 'Learn JavaScript from basics to advanced concepts including DOM manipulation, ES6+, and async programming.', ARRAY['JS Basics','DOM','ES6+','Async/Await','Events'], '₹3,000', 3000, 'Basic computer knowledge', 'Course Completion Certificate', 'TNGC Institute', false, ARRAY['Modern JavaScript (ES6+)','DOM manipulation','Async programming'], ARRAY['Front-End Developer','Web Designer','UI Developer'], ARRAY['VS Code','Chrome Browser','Node.js'], 'Weekdays: 9 AM - 10 AM', '10-15 students', 'active'),
-('angular-js', 'Angular JS', 'Angular', '1 Month', 'short-term', 'Angular framework for web applications', 'Learn Angular framework for building dynamic web applications.', ARRAY['Angular Basics','Components','Services','Routing','HTTP Client'], '₹4,000', 4000, 'JavaScript knowledge', 'Course Completion Certificate', 'TNGC Institute', false, ARRAY['Modern framework','Component-based architecture','Real projects'], ARRAY['Front-End Developer','Angular Developer','Web Developer'], ARRAY['VS Code','Angular CLI','Node.js'], 'Weekdays: 9 AM - 10 AM', '10-15 students', 'active'),
-('html', 'HTML', 'HTML', '10 Days', 'short-term', 'HTML5 web page structure', 'Learn HTML5 for creating structured web pages.', ARRAY['HTML5 Basics','Forms','Tables','Media','Semantic HTML'], '₹1,000', 1000, 'No prior experience needed', 'Course Completion Certificate', 'TNGC Institute', false, ARRAY['Hands-on practice','Real-world examples','Portfolio project'], ARRAY['Foundation for web development'], ARRAY['VS Code','Chrome Browser'], 'Weekdays: 9 AM - 10 AM', '10-15 students', 'active'),
-('css', 'CSS', 'CSS', '15 Days', 'short-term', 'CSS3 styling and layout', 'Learn CSS3 for styling web pages including flexbox, grid, and responsive design.', ARRAY['CSS3 Basics','Flexbox','Grid','Responsive Design','Animations'], '₹1,500', 1500, 'HTML knowledge', 'Course Completion Certificate', 'TNGC Institute', false, ARRAY['Modern CSS layout','Responsive design','Beautiful designs'], ARRAY['Foundation for web development'], ARRAY['VS Code','Chrome Browser'], 'Weekdays: 9 AM - 10 AM', '10-15 students', 'active'),
-('bootstrap', 'Bootstrap', 'Bootstrap', '15 Days', 'short-term', 'Bootstrap framework for responsive design', 'Learn Bootstrap framework for building responsive, mobile-first websites.', ARRAY['Bootstrap 5','Grid System','Components','Utilities','Responsive Design'], '₹1,500', 1500, 'HTML & CSS knowledge', 'Course Completion Certificate', 'TNGC Institute', false, ARRAY['Rapid prototyping','Mobile-first design','Ready-made components'], ARRAY['Foundation for web development'], ARRAY['VS Code','Bootstrap CDN'], 'Weekdays: 9 AM - 10 AM', '10-15 students', 'active'),
-('core-python', 'Core Python', 'Python', '1.5 Months', 'short-term', 'Core Python programming', 'Learn Python programming from basics to advanced concepts.', ARRAY['Python Basics','Data Types','Functions','OOPS','File Handling'], '₹4,000', 4000, 'Basic computer knowledge', 'Course Completion Certificate', 'TNGC Institute', false, ARRAY['Easy to learn syntax','Versatile language','Project-based learning'], ARRAY['Python Developer Trainee','Automation Tester','Data Analyst Junior'], ARRAY['VS Code','PyCharm','Python IDLE'], 'Weekdays: 9 AM - 10:30 AM', '10-15 students', 'active'),
-('oops-python', 'Oops Python', 'OOPS Python', '15 Days', 'short-term', 'Object-Oriented Programming with Python', 'Learn OOPS concepts in Python including classes, inheritance, polymorphism, and design patterns.', ARRAY['Classes & Objects','Inheritance','Polymorphism','Encapsulation','Design Patterns'], '₹2,500', 2500, 'Core Python knowledge', 'Course Completion Certificate', 'TNGC Institute', false, ARRAY['OOP mastery','Design patterns','Real-world applications'], ARRAY['Python Developer','Software Engineer'], ARRAY['VS Code','PyCharm'], 'Weekdays: 9 AM - 10:30 AM', '10-15 students', 'active')
-ON CONFLICT (slug) DO NOTHING;
-
-DO $$
-DECLARE
-  v_removed integer;
-BEGIN
-
-  DELETE FROM public.faculty f
-   WHERE EXISTS (
-     SELECT 1
-       FROM public.faculty d
-      WHERE d.id <> f.id
-        AND lower(d.name) = lower(f.name)
-        AND d.role = f.role
-        AND d.is_founder = f.is_founder
-        AND (d.branch, d.description, d.qualifications)
-            IS NOT DISTINCT FROM (f.branch, f.description, f.qualifications)
-   );
-
-  GET DIAGNOSTICS v_removed = ROW_COUNT;
-
-  IF v_removed > 0 THEN
-    RAISE NOTICE 'faculty: removed % duplicate row(s)', v_removed;
-  END IF;
-
-  IF NOT EXISTS (SELECT 1 FROM public.faculty) THEN
-    INSERT INTO faculty (name, role, branch, qualifications, description, is_founder) VALUES
-      ('Nadiya', 'Director', 'Ramanthapur', ARRAY['MBA','Degree'], 'The Director of The New Generation Computers, guiding students with experience, discipline, and a strong training culture.', false),
-      ('Mada Eswar', 'Founder', 'Ramanthapur', ARRAY[]::text[], NULL, true),
-      ('Mr G Madhavrao', 'Coding Trainer', 'Ramanthapur', ARRAY['Coding Trainer'], NULL, false),
-      ('Mr M Harish Kumar', 'Computer Trainer', 'Ramanthapur', ARRAY['Computer Trainer'], NULL, false);
-  END IF;
-END $$;
+-- Seed only the 14 courses shown in the supplied institute brochures.
+-- Run after supabase.sql, which creates the courses table and its enum types.
+INSERT INTO public.courses (
+  slug, name, short_name, duration, type, description, full_description,
+  topics, fees, fee_numeric, eligibility, certification, certifications,
+  certification_body, highlights, schedule, batch_size
+) VALUES
+  ('adca', 'Advanced Diploma in Computer Application (A.D.C.A.)', 'A.D.C.A.', '65 Days', 'long-term',
+   'Advanced diploma in computer applications.', 'Computer applications, office tools, internet skills and accounting topics.',
+   ARRAY['Computer Basics','Typing Master','Windows Concepts','MS-Word','MS-Excel','MS-PowerPoint','Internet Skills','Live Projects','Manual A/c Basic','Tally Prime Software','Groups / Ledgers / Vouchers','Account Billings','Cost Accounts / BRS','Inventory Billings / Payroll','GST / SGST / CGST / IGST','Cess and TDS Billings'],
+   '₹6,500', 6500, 'Not specified in brochure', 'Course Completion Certificate', ARRAY['Advanced Diploma in Computer Application (A.D.C.A.)'],
+   'The New Generation Computers', ARRAY['Includes 2 books, 2 exams and 2 certificates'], 'Not specified in brochure', 'Not specified in brochure'),
+  ('dca', 'Diploma in Computer Application (D.C.A.)', 'D.C.A.', '40 Days', 'long-term',
+   'Diploma in computer applications.', 'Computer basics, typing, Windows, office tools, internet skills and live projects.',
+   ARRAY['Computer Basics','Typing Master','Windows Concepts','MS-Word','MS-Excel','MS-PowerPoint','Internet Skills','Live Projects'],
+   '₹3,500', 3500, 'Not specified in brochure', 'Course Completion Certificate', ARRAY['Diploma in Computer Application (D.C.A.)'],
+   'The New Generation Computers', ARRAY['Includes 1 book, 1 exam and 1 certificate'], 'Not specified in brochure', 'Not specified in brochure'),
+  ('dct', 'Diploma in Computer Accounting + Tally Prime (D.C.T.)', 'D.C.T.', '35 Days', 'long-term',
+   'Diploma in computer accounting and Tally Prime.', 'Manual accounting, Tally Prime, ledgers, vouchers, billing, inventory, payroll, GST and TDS.',
+   ARRAY['Manual A/c Basic','Tally Prime Software','Groups / Ledgers','Vouchers Entry','Account Billings','Cost Accounts / BRS','Inventory Billings / Payroll','GST / SGST / CGST / IGST','Cess and TDS Billings'],
+   '₹3,500', 3500, 'Not specified in brochure', 'Course Completion Certificate', ARRAY['Diploma in Computer Accounting + Tally Prime (D.C.T.)'],
+   'The New Generation Computers', ARRAY['Includes 1 book, 1 exam and 1 certificate'], 'Not specified in brochure', 'Not specified in brochure'),
+  ('dcl', 'Diploma in C Programming Language (D.C.L.)', 'D.C.L.', '45 Days', 'long-term',
+   'Diploma in C programming language.', 'C fundamentals, control flow, arrays, functions, pointers, memory, structures, unions and file handling.',
+   ARRAY['C Basics','C Tokens','Decision Making Statements','Looping Statements','Arrays & Strings','Functions & Recursion','Storage Classes','Pointers','Dynamic Memory','Structures & Unions','Preprocessor Directives','File Handling in C'],
+   '₹4,500', 4500, 'Not specified in brochure', 'Course Completion Certificate', ARRAY['Diploma in C Programming Language (D.C.L.)'],
+   'The New Generation Computers', ARRAY['Includes 1 book, 1 exam and 1 certificate'], 'Not specified in brochure', 'Not specified in brochure'),
+  ('pgdca', 'Post Graduate Diploma in Computer Application (P.G.D.C.A.)', 'P.G.D.C.A.', '75 Days', 'long-term',
+   'Post graduate diploma in computer applications.', 'Computer basics, office tools, internet skills and C language.',
+   ARRAY['Computer Basics','MS-Word','MS-Excel','MS-PowerPoint','Internet Skills','C Language'],
+   '₹7,000', 7000, 'Not specified in brochure', 'Course Completion Certificate', ARRAY['Post Graduate Diploma in Computer Application (P.G.D.C.A.)'],
+   'The New Generation Computers', ARRAY['Includes 2 books, 2 exams and 1 certificate'], 'Not specified in brochure', 'Not specified in brochure'),
+  ('pgjpl', 'Post Graduate Diploma in Core Java Programming Language (P.G.C.J.P.L.)', 'P.G.C.J.P.L.', '50 Days', 'long-term',
+   'Post graduate diploma in core Java programming.', 'Java fundamentals, object-oriented programming, exceptions, arrays, collections and Java utility packages.',
+   ARRAY['Introduction to Java','Control Statements','Looping Statements','Classes & Objects','Inheritance','Polymorphism','Abstractions','Encapsulation','I/O Streams','Interfaces & Packages','Exception Handling','Multithreading','String Handling','Arrays','Collections','Java Util Package'],
+   '₹5,000', 5000, 'Not specified in brochure', 'Course Completion Certificate', ARRAY['Post Graduate Diploma in Core Java Programming Language (P.G.C.J.P.L.)'],
+   'The New Generation Computers', ARRAY['Includes 1 book, 1 exam and 1 certificate'], 'Not specified in brochure', 'Not specified in brochure'),
+  ('pgajpl', 'Post Graduate Diploma in Advanced Java Programming Language (P.G.A.J.L.)', 'P.G.A.J.L.', '50 Days', 'long-term',
+   'Post graduate diploma in advanced Java programming.', 'Java 8, functional programming, JDBC, MySQL, joins and procedures.',
+   ARRAY['Introduction to Java 8','Lambda Expressions','Functional Interfaces','Streams API','Default Methods','Static Methods','Optional Classes','Date & Time API','JDBC','Statement Interfaces','Prepared Statement','ResultSet Interfaces','Introduction to DB','MySQL','MySQL Commands','Joins & Procedures'],
+   '₹5,000', 5000, 'Not specified in brochure', 'Course Completion Certificate', ARRAY['Post Graduate Diploma in Advanced Java Programming Language (P.G.A.J.L.)'],
+   'The New Generation Computers', ARRAY['Includes 1 book, 1 exam and 1 certificate'], 'Not specified in brochure', 'Not specified in brochure'),
+  ('pgcpl', 'Post Graduate Diploma in Core Python Programming Language (P.G.C.P.L.)', 'P.G.C.P.L.', '45 Days', 'long-term',
+   'Post graduate diploma in core Python programming.', 'Python fundamentals, data types, operators, control flow, data structures, strings, modules, packages and file handling.',
+   ARRAY['Introduction to Python','Variables & Data Types','Operators','Control Statements','Data Structures','Strings & Functions','Modules','Packages','File Handling','Exception Handling'],
+   '₹4,500', 4500, 'Not specified in brochure', 'Course Completion Certificate', ARRAY['Post Graduate Diploma in Core Python Programming Language (P.G.C.P.L.)'],
+   'The New Generation Computers', ARRAY['Includes 1 book, 1 exam and 1 certificate'], 'Not specified in brochure', 'Not specified in brochure'),
+  ('pgappl', 'Post Graduate Diploma in Advanced Python Programming Language (P.G.A.P.L.)', 'P.G.A.P.L.', '50 Days', 'long-term',
+   'Post graduate diploma in advanced Python programming.', 'Object-oriented concepts, exceptions, databases, SQL, Python with MySQL and projects.',
+   ARRAY['OOPs Concepts','Methods & Variables','Inheritance','Polymorphism','Abstraction','Encapsulation','Multithreading','Exceptions','Introduction to DB','MySQL','Basic SQL Commands','Joins & Sub Queries','Python with MySQL','Python Projects'],
+   '₹5,000', 5000, 'Not specified in brochure', 'Course Completion Certificate', ARRAY['Post Graduate Diploma in Advanced Python Programming Language (P.G.A.P.L.)'],
+   'The New Generation Computers', ARRAY['Includes 1 book, 1 exam and 1 certificate'], 'Not specified in brochure', 'Not specified in brochure'),
+  ('dsl', 'Diploma in Data Structure Language (D.S.L.)', 'D.S.L.', '60 Days', 'long-term',
+   'Diploma in data structure language.', 'Data structures, searching, sorting and common algorithmic techniques.',
+   ARRAY['Introduction to Data Structures','Arrays & Strings','Linked Lists','Searching','Stacks & Queues','Trees','Graphs','Sorting'],
+   '₹6,000', 6000, 'Not specified in brochure', 'Course Completion Certificate', ARRAY['Diploma in Data Structure Language (D.S.L.)'],
+   'The New Generation Computers', ARRAY['Includes 1 book, 1 exam and 1 certificate'], 'Not specified in brochure', 'Not specified in brochure'),
+  ('pdds', 'Post Graduation Diploma in Data Science (P.D.D.S.)', 'P.D.D.S.', '90 Days', 'long-term',
+   'Post graduation diploma in data science.', 'Python, data structures, NumPy, Pandas, visualization, statistics, correlation, regression and data preprocessing.',
+   ARRAY['Python Basics','Data Structures','NumPy','Pandas','Matplotlib & Seaborn','Data Visualization','Descriptive Statistics','Correlation','Regression','Data Preprocessing'],
+   '₹9,000', 9000, 'Not specified in brochure', 'Course Completion Certificate', ARRAY['Post Graduation Diploma in Data Science (P.D.D.S.)'],
+   'The New Generation Computers', ARRAY['Includes 1 book, 1 exam and 1 certificate'], 'Not specified in brochure', 'Not specified in brochure'),
+  ('java-full-stack', 'Java Full Stack Development', 'Java Full Stack', '180 Days', 'long-term',
+   'Full stack Java development programme.', 'Core Java, JDK 8+, MySQL, JDBC, HTML, CSS, JavaScript, ReactJS, Spring Boot and microservices.',
+   ARRAY['Core Java','JDK 8+ Concepts','MySQL','JDBC','HTML, CSS, JS','React JS','Spring Boot','Micro Services'],
+   '₹30,000', 30000, 'Not specified in brochure', 'Course Completion Certificate', ARRAY['Java Full Stack Development'],
+   'The New Generation Computers', ARRAY['Includes 4 books, 4 exams and 1 certificate'], 'Not specified in brochure', 'Not specified in brochure'),
+  ('python-full-stack', 'Python Full Stack Development', 'Python Full Stack', '180 Days', 'long-term',
+   'Full stack Python development programme.', 'Core Python, Advanced Python, MySQL, HTML, CSS, JavaScript, ReactJS, Flask, testing and deployment.',
+   ARRAY['Core Python','Advanced Python','MySQL','HTML, CSS, JS','React JS','Flask Framework','Testing','Deployment'],
+   '₹30,000', 30000, 'Not specified in brochure', 'Course Completion Certificate', ARRAY['Python Full Stack Development'],
+   'The New Generation Computers', ARRAY['Includes 4 books, 4 exams and 1 certificate'], 'Not specified in brochure', 'Not specified in brochure'),
+  ('front-end-development', 'Front-End Development', 'Front-End Development', '90 Days', 'long-term',
+   'Front-end development programme.', 'HTML5, CSS, JavaScript, Bootstrap, ReactJS and projects.',
+   ARRAY['HTML 5','CSS','JavaScript','Bootstrap','React JS','Projects'],
+   '₹8,500', 8500, 'Not specified in brochure', 'Course Completion Certificate', ARRAY['Front-End Development'],
+   'The New Generation Computers', ARRAY['Includes 2 books, 2 exams and 1 certificate'], 'Not specified in brochure', 'Not specified in brochure')
+ON CONFLICT (slug) DO UPDATE SET
+  name = EXCLUDED.name,
+  short_name = EXCLUDED.short_name,
+  duration = EXCLUDED.duration,
+  type = EXCLUDED.type,
+  description = EXCLUDED.description,
+  full_description = EXCLUDED.full_description,
+  topics = EXCLUDED.topics,
+  fees = EXCLUDED.fees,
+  fee_numeric = EXCLUDED.fee_numeric,
+  eligibility = EXCLUDED.eligibility,
+  certification = EXCLUDED.certification,
+  certifications = EXCLUDED.certifications,
+  certification_body = EXCLUDED.certification_body,
+  highlights = EXCLUDED.highlights,
+  schedule = EXCLUDED.schedule,
+  batch_size = EXCLUDED.batch_size,
+  updated_at = NOW();

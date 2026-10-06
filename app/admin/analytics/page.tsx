@@ -20,7 +20,9 @@ type Payment = Database["public"]["Tables"]["payments"]["Row"];
 type Transaction = Database["public"]["Tables"]["transactions"]["Row"];
 type Branch = Database["public"]["Tables"]["branches"]["Row"];
 
-const TABS = ["All Dates", "This Month", "This Quarter", "This Year"] as const;
+const TABS = ["This Week", "This Month", "Last 3 Months", "This Year"] as const;
+const DAY_MS = 86_400_000;
+const PAGE_SIZE = 1000;
 
 /**
  * Nothing selected.
@@ -55,12 +57,10 @@ interface AnalyticsRange {
 const OPEN_RANGE: AnalyticsRange = { from: null, to: null };
 
 /**
- * Reads a Postgres `date` column as a local date.
+ * Reads a Postgres `date` column as a timezone-independent calendar date.
  *
- * `new Date("2026-09-30")` is UTC midnight, which in any timezone behind UTC
- * resolves to the evening of the 29th and quietly drops a day out of a
- * from-to filter. These columns carry no timezone and neither should the
- * comparison, so the string is unpacked by hand.
+ * These columns carry no timezone, so comparisons use UTC calendar dates and
+ * stay stable regardless of the browser timezone.
  */
 function parseDateOnly(value: string | null | undefined): Date | null {
   if (!value) return null;
@@ -68,8 +68,17 @@ function parseDateOnly(value: string | null | undefined): Date | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value.trim());
   if (!match) return null;
 
-  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
-  return Number.isNaN(date.getTime()) ? null : date;
+  const [, yearText, monthText, dayText] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) return null;
+  return date;
 }
 
 /** Reads a `yyyy-mm-dd` box value as a local date, or null when it is blank. */
@@ -104,8 +113,8 @@ function resolveRange(values: FilterValues, tab: string): AnalyticsRange {
       // An open end runs to the end of its own day, so a filter for the 1st
       // still includes money taken on the 1st.
       to: to
-        ? new Date(to.getFullYear(), to.getMonth(), to.getDate(), 23, 59, 59, 999)
-        : endOfDay(new Date()),
+        ? endOfDay(to)
+        : endOfDay(todayInInstituteTime()),
     };
   }
 
@@ -113,43 +122,77 @@ function resolveRange(values: FilterValues, tab: string): AnalyticsRange {
 }
 
 function endOfDay(date: Date) {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999);
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 23, 59, 59, 999));
 }
 
 function startOfDay(date: Date) {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+}
+
+function todayInInstituteTime(): Date {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const value = (type: string) => Number(parts.find((part) => part.type === type)?.value);
+  return new Date(Date.UTC(value("year"), value("month") - 1, value("day")));
+}
+
+function shiftUTCMonths(date: Date, amount: number): Date {
+  const targetMonth = date.getUTCMonth() + amount;
+  const firstOfTargetMonth = new Date(Date.UTC(date.getUTCFullYear(), targetMonth, 1));
+  const lastDayOfTargetMonth = new Date(Date.UTC(
+    firstOfTargetMonth.getUTCFullYear(),
+    firstOfTargetMonth.getUTCMonth() + 1,
+    0
+  )).getUTCDate();
+  return new Date(Date.UTC(
+    firstOfTargetMonth.getUTCFullYear(),
+    firstOfTargetMonth.getUTCMonth(),
+    Math.min(date.getUTCDate(), lastDayOfTargetMonth)
+  ));
 }
 
 function tabRange(tab: string): AnalyticsRange {
-  if (tab === "All Dates") return OPEN_RANGE;
-
-  const now = new Date();
+  const now = todayInInstituteTime();
   const to = endOfDay(now);
 
+  if (tab === "This Week") {
+    const daysSinceMonday = (now.getUTCDay() + 6) % 7;
+    return { from: new Date(now.getTime() - daysSinceMonday * DAY_MS), to };
+  }
+
   if (tab === "This Month") {
-    return { from: new Date(now.getFullYear(), now.getMonth(), 1), to };
+    return { from: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)), to };
   }
 
-  if (tab === "This Quarter") {
-    return { from: new Date(now.getFullYear(), Math.floor(now.getMonth() / 3) * 3, 1), to };
+  if (tab === "Last 3 Months") {
+    return { from: shiftUTCMonths(now, -3), to };
   }
 
-  return { from: new Date(now.getFullYear(), 0, 1), to };
+  if (tab === "This Year") {
+    return { from: new Date(Date.UTC(now.getUTCFullYear(), 0, 1)), to };
+  }
+
+  return { from: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)), to };
 }
 
 function spanDays(range: AnalyticsRange): number {
   if (!range.from || !range.to) return 0;
-  return Math.max(1, Math.round((range.to.getTime() - range.from.getTime()) / 86_400_000));
+  const from = startOfDay(range.from).getTime();
+  const to = startOfDay(range.to).getTime();
+  return Math.max(1, Math.floor((to - from) / DAY_MS) + 1);
 }
 
-/** Short windows read better as days or weeks; long ones only work as months. */
-function isDayBucketed(range: AnalyticsRange) {
-  return spanDays(range) <= 45;
-}
-
-function isWeekBucketed(range: AnalyticsRange) {
+/** Use days for short ranges, weeks for medium ranges, and months for long ranges. */
+function bucketUnit(range: AnalyticsRange): "day" | "week" | "month" {
+  if (!range.from || !range.to) return "month";
   const days = spanDays(range);
-  return days === 0 || days <= 92;
+  if (days <= 45) return "day";
+  if (days <= 180) return "week";
+  return "month";
 }
 
 /**
@@ -163,7 +206,7 @@ function describeRange(range: AnalyticsRange): string {
   if (!range.from && !range.to) return "All dates";
 
   const fmt = (date: Date) =>
-    date.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+    date.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" });
 
   if (range.from && range.to && startOfDay(range.from).getTime() === startOfDay(range.to).getTime()) {
     return fmt(range.from);
@@ -174,50 +217,68 @@ function describeRange(range: AnalyticsRange): string {
   return `${from} to ${to}`;
 }
 
-function getMonthName(monthIndex: number) {
-  const names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  return names[monthIndex];
+function dateKey(date: Date): string {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
 }
 
-function getWeekLabel(date: Date): string {
-  const dayOfMonth = date.getDate();
-  const weekNum = Math.ceil(dayOfMonth / 7);
-  return `Week ${weekNum}`;
+function bucketStart(date: Date, unit: "day" | "week" | "month"): Date {
+  if (unit === "month") return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
+  if (unit === "week") {
+    const daysSinceMonday = (date.getUTCDay() + 6) % 7;
+    return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() - daysSinceMonday));
+  }
+  return startOfDay(date);
+}
+
+function formatBucket(date: Date, unit: "day" | "week" | "month"): string {
+  const options: Intl.DateTimeFormatOptions = unit === "month"
+    ? { month: "short", year: "numeric" }
+    : { day: "2-digit", month: "short" };
+  return date.toLocaleDateString("en-IN", { ...options, timeZone: "UTC" });
+}
+
+function getBucketPlan(range: AnalyticsRange, values: Array<string | null | undefined>) {
+  const dates = values.map(parseDateOnly).filter((date): date is Date => date !== null);
+  if (dates.length === 0 && (!range.from || !range.to)) {
+    return { unit: bucketUnit(range), buckets: [] as Array<{ key: string; label: string }> };
+  }
+
+  const start = range.from ? startOfDay(range.from) : dates.reduce((a, b) => a < b ? a : b);
+  const end = range.to ? startOfDay(range.to) : dates.reduce((a, b) => a > b ? a : b);
+  const unit = range.from || range.to ? bucketUnit({ from: start, to: end }) : "month";
+  if (start > end) return { unit, buckets: [] as Array<{ key: string; label: string }> };
+
+  const buckets: Array<{ key: string; label: string }> = [];
+  let current = bucketStart(start, unit);
+  const lastBucket = bucketStart(end, unit);
+  while (current <= lastBucket) {
+    buckets.push({ key: dateKey(current), label: formatBucket(current, unit) });
+    current = unit === "month"
+      ? new Date(Date.UTC(current.getUTCFullYear(), current.getUTCMonth() + 1, 1))
+      : new Date(current.getTime() + (unit === "week" ? 7 : 1) * DAY_MS);
+  }
+  return { unit, buckets };
 }
 
 /**
- * Buckets enrolments by week or by month, whichever suits the span.
+ * Buckets enrollments at the granularity chosen for the selected date window.
  *
  * Only bucketing happens here. The date window and every other filter are
  * already applied to the rows it is handed, so no chart can disagree with the
  * card above it about how many students there are.
  */
-function computeEnrollmentTrends(students: Student[], range: AnalyticsRange = OPEN_RANGE) {
-  const days = spanDays(range);
-  const byWeek = isWeekBucketed(range);
-  const grouped: Record<string, number> = {};
+function computeEnrollmentTrends(students: Student[], range: AnalyticsRange) {
+  const plan = getBucketPlan(range, students.map((student) => student.enrollment_date));
+  const counts = new Map(plan.buckets.map((bucket) => [bucket.key, 0]));
 
-  students.forEach((s) => {
-    const date = parseDateOnly(s.enrollment_date);
+  students.forEach((student) => {
+    const date = parseDateOnly(student.enrollment_date);
     if (!date) return;
-
-    const label = byWeek ? getWeekLabel(date) : getMonthName(date.getMonth());
-    grouped[label] = (grouped[label] || 0) + 1;
+    const key = dateKey(bucketStart(date, plan.unit));
+    if (counts.has(key)) counts.set(key, (counts.get(key) ?? 0) + 1);
   });
 
-  if (byWeek) {
-    // Capped at six: a five-week span still needs all five, and past that the
-    // axis turns into a list nobody reads.
-    const weekCount = days === 0 ? 4 : Math.max(4, Math.ceil(days / 7));
-    const weeks: string[] = [];
-    for (let week = 1; week <= weekCount; week += 1) {
-      weeks.push(`Week ${week}`);
-    }
-    return weeks.slice(0, 6).map((w) => ({ month: w, value: grouped[w] || 0 }));
-  }
-
-  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  return months.map((m) => ({ month: m, value: grouped[m] || 0 }));
+  return plan.buckets.map((bucket) => ({ month: bucket.label, value: counts.get(bucket.key) ?? 0 }));
 }
 
 /**
@@ -232,11 +293,10 @@ function previousRangeOf(range: AnalyticsRange): AnalyticsRange {
 
   const from = startOfDay(range.from);
   const to = endOfDay(range.to);
-  const days = Math.max(1, Math.round((to.getTime() - from.getTime()) / 86_400_000));
-
-  const prevTo = new Date(from.getFullYear(), from.getMonth(), from.getDate(), 23, 59, 59, 999);
+  const days = Math.max(1, Math.floor((startOfDay(to).getTime() - from.getTime()) / DAY_MS) + 1);
+  const prevTo = endOfDay(new Date(from.getTime() - DAY_MS));
   const prevToDay = startOfDay(prevTo);
-  const prevFrom = new Date(prevToDay.getTime() - (days - 1) * 86_400_000);
+  const prevFrom = new Date(prevToDay.getTime() - (days - 1) * DAY_MS);
 
   return { from: prevFrom, to: prevTo };
 }
@@ -279,47 +339,26 @@ function computeBranchData(students: Student[], branches: Branch[]) {
  * filter round to zero, which is exactly the data being asked about.
  */
 function computeRevenueTrend(transactions: Transaction[], range: AnalyticsRange) {
-  if (isDayBucketed(range)) {
-    const buckets = new Map<string, { revenue: number; expenses: number }>();
+  const plan = getBucketPlan(range, transactions.map((transaction) => transaction.date));
+  const totals = new Map(plan.buckets.map((bucket) => [bucket.key, { revenue: 0, expenses: 0 }]));
 
-    for (const t of transactions) {
-      const date = parseDateOnly(t.date);
-      if (!date) continue;
-
-      const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-      const bucket = buckets.get(key) ?? { revenue: 0, expenses: 0 };
-      if (t.type === "income") bucket.revenue += t.amount;
-      else bucket.expenses += t.amount;
-      buckets.set(key, bucket);
-    }
-
-    return [...buckets.entries()]
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([key, bucket]) => ({
-        month: new Date(`${key}T00:00:00`).toLocaleDateString("en-IN", { day: "2-digit", month: "short" }),
-        revenue: Math.round(bucket.revenue),
-        expenses: Math.round(bucket.expenses),
-      }));
-  }
-
-  const grouped: Record<string, { revenue: number; expenses: number }> = {};
-  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  months.forEach((m) => (grouped[m] = { revenue: 0, expenses: 0 }));
-
-  transactions.forEach((t) => {
-    const date = parseDateOnly(t.date);
+  transactions.forEach((transaction) => {
+    const date = parseDateOnly(transaction.date);
     if (!date) return;
-
-    const label = getMonthName(date.getMonth());
-    if (t.type === "income") grouped[label].revenue += t.amount;
-    else grouped[label].expenses += t.amount;
+    const bucket = totals.get(dateKey(bucketStart(date, plan.unit)));
+    if (!bucket) return;
+    if (transaction.type === "income") bucket.revenue += transaction.amount;
+    else bucket.expenses += transaction.amount;
   });
 
-  return months.map((m) => ({
-    month: m,
-    revenue: Math.round(grouped[m].revenue),
-    expenses: Math.round(grouped[m].expenses),
-  }));
+  return plan.buckets.map((bucket) => {
+    const total = totals.get(bucket.key) ?? { revenue: 0, expenses: 0 };
+    return {
+      month: bucket.label,
+      revenue: Math.round(total.revenue),
+      expenses: Math.round(total.expenses),
+    };
+  });
 }
 
 function computeCompletionData(students: Student[]) {
@@ -414,10 +453,24 @@ function computeEnrollmentPie(students: Student[], courses: Course[]) {
   ];
 }
 
+async function fetchAllRows<T>(
+  fetchPage: (from: number, to: number) => Promise<{ data: T[] | null; error: { message: string } | null }>
+): Promise<T[]> {
+  const rows: T[] = [];
+  for (let offset = 0; ; offset += PAGE_SIZE) {
+    const { data, error } = await fetchPage(offset, offset + PAGE_SIZE - 1);
+    if (error) throw new Error(error.message);
+    rows.push(...(data ?? []));
+    if (!data || data.length < PAGE_SIZE) return rows;
+  }
+}
+
 export default function AnalyticsPage() {
-  const [activeTab, setActiveTab] = useState<string>("All Dates");
+  const [activeTab, setActiveTab] = useState<string>("This Month");
   const [exportOpen, setExportOpen] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [reload, setReload] = useState(0);
 
   const [students, setStudents] = useState<Student[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
@@ -433,22 +486,29 @@ export default function AnalyticsPage() {
   useEffect(() => {
     async function fetchData() {
       setLoading(true);
-      const [studentsRes, coursesRes, paymentsRes, transactionsRes, branchesRes] = await Promise.all([
-        supabase.from("students").select("*"),
-        supabase.from("courses").select("*"),
-        supabase.from("payments").select("*"),
-        supabase.from("transactions").select("*"),
-        supabase.from("branches").select("*"),
-      ]);
-      if (studentsRes.data) setStudents(studentsRes.data);
-      if (coursesRes.data) setCourses(coursesRes.data);
-      if (paymentsRes.data) setPayments(paymentsRes.data);
-      if (transactionsRes.data) setTransactions(transactionsRes.data);
-      if (branchesRes.data) setBranches(branchesRes.data);
-      setLoading(false);
+      setLoadError("");
+      try {
+        const [studentRows, courseRows, paymentRows, transactionRows, branchRows] = await Promise.all([
+          fetchAllRows<Student>(async (from, to) => await supabase.from("students").select("*").order("id").range(from, to)),
+          fetchAllRows<Course>(async (from, to) => await supabase.from("courses").select("*").order("id").range(from, to)),
+          fetchAllRows<Payment>(async (from, to) => await supabase.from("payments").select("*").order("id").range(from, to)),
+          fetchAllRows<Transaction>(async (from, to) => await supabase.from("transactions").select("*").order("id").range(from, to)),
+          fetchAllRows<Branch>(async (from, to) => await supabase.from("branches").select("*").order("id").range(from, to)),
+        ]);
+        setStudents(studentRows);
+        setCourses(courseRows);
+        setPayments(paymentRows);
+        setTransactions(transactionRows);
+        setBranches(branchRows);
+      } catch (error) {
+        console.error("[analytics] failed to load records:", error);
+        setLoadError(error instanceof Error ? error.message : "Analytics data could not be loaded.");
+      } finally {
+        setLoading(false);
+      }
     }
-    fetchData();
-  }, []);
+    void fetchData();
+  }, [reload]);
 
   const range = useMemo(() => resolveRange(filters, activeTab), [filters, activeTab]);
 
@@ -553,10 +613,7 @@ export default function AnalyticsPage() {
           isWithinRange(p.payment_date, range) &&
           (!filters.course || p.course_slug === filters.course) &&
           (!filters.branch || p.branch_id === filters.branch) &&
-          (!filters.paymentMethod || p.method === filters.paymentMethod) &&
-          // The payment-status filter is not applied here: the Payment Status
-          // chart counts all of them, and filtering the set down to one status
-          // would collapse it to a single full-height bar.
+          (!filters.paymentMethod || p.method.trim().toLowerCase() === filters.paymentMethod.toLowerCase()) &&
           (!filters.paymentStatus || p.status === filters.paymentStatus)
       ),
     [payments, range, filters.course, filters.branch, filters.paymentMethod, filters.paymentStatus]
@@ -567,9 +624,10 @@ export default function AnalyticsPage() {
       transactions.filter(
         (t) =>
           isWithinRange(t.date, range) &&
+          (!filters.branch || t.branch_id === filters.branch) &&
           (!filters.transactionType || t.type === filters.transactionType)
       ),
-    [transactions, range, filters.transactionType]
+    [transactions, range, filters.branch, filters.transactionType]
   );
 
   /**
@@ -598,12 +656,13 @@ export default function AnalyticsPage() {
       transactions.filter(
         (t) =>
           isWithinRange(t.date, previousRange) &&
+          (!filters.branch || t.branch_id === filters.branch) &&
           (!filters.transactionType || t.type === filters.transactionType)
       ),
-    [transactions, previousRange, filters.transactionType]
+    [transactions, previousRange, filters.branch, filters.transactionType]
   );
 
-  const enrollments = computeEnrollmentTrends(scopedStudents);
+  const enrollments = computeEnrollmentTrends(scopedStudents, range);
   const totalEnrollments = scopedStudents.length;
   const branchData = computeBranchData(scopedStudents, branches);
   const revenueTrend = computeRevenueTrend(scopedTransactions, range);
@@ -618,15 +677,26 @@ export default function AnalyticsPage() {
   const completionRate = totalStudents > 0 ? Math.round((activeStudents / totalStudents) * 100) : 0;
   const totalRevenue = scopedTransactions.filter((t) => t.type === "income").reduce((sum, t) => sum + t.amount, 0);
   const revenueLakhs = totalRevenue >= 100000 ? `₹${(totalRevenue / 100000).toFixed(1)}L` : `₹${totalRevenue.toLocaleString("en-IN")}`;
-  const avgRating = courses.length > 0 ? (courses.reduce((s, c) => s + c.rating, 0) / courses.length).toFixed(1) : "0.0";
+  const scopedCourses = filters.course ? courses.filter((course) => course.slug === filters.course) : courses;
+  const avgRating = scopedCourses.length > 0
+    ? (scopedCourses.reduce((sum, course) => sum + course.rating, 0) / scopedCourses.length).toFixed(1)
+    : "0.0";
   const totalPayments = scopedPayments.length;
 
-  const hasCustomFilter = Object.entries(filters).some(([key, value]) => value !== DEFAULT_FILTERS[key]);
+  const hasCustomFilter = activeTab !== "This Month" ||
+    Object.entries(filters).some(([key, value]) => value !== DEFAULT_FILTERS[key]);
   const hasCustomDateRange = Boolean(filters.from || filters.to);
   const rangeSummary = describeRange(range);
 
-  const overallGrowth = totalStudents > 0 ? `+${Math.round((totalEnrollments / totalStudents) * 100)}%` : "+0%";
-  const revenueGrowth = revenueTrend.length >= 2 ? `+${Math.round(((revenueTrend[revenueTrend.length - 1].revenue - revenueTrend[0].revenue) / (revenueTrend[0].revenue || 1)) * 100)}%` : "+0%";
+  const overallGrowth = range.from && range.to
+    ? percentChange(totalStudents, scopedPreviousStudents.length) ?? "—"
+    : "—";
+  const previousRevenue = scopedPreviousTransactions
+    .filter((transaction) => transaction.type === "income")
+    .reduce((sum, transaction) => sum + transaction.amount, 0);
+  const revenueGrowth = range.from && range.to
+    ? percentChange(totalRevenue, previousRevenue) ?? "—"
+    : "—";
 
   const data = {
     enrollments,
@@ -644,6 +714,19 @@ export default function AnalyticsPage() {
       <div className="flex items-center justify-center min-h-[400px]">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
       </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <Card>
+        <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
+          <p className="text-sm text-destructive">Analytics data could not be loaded: {loadError}</p>
+          <Button onClick={() => { setLoading(true); setReload((count) => count + 1); }}>
+            Try again
+          </Button>
+        </CardContent>
+      </Card>
     );
   }
 
@@ -693,17 +776,21 @@ export default function AnalyticsPage() {
         </div>
         <FilterDialog
           title="More filters"
-          description="Narrow every chart on this page to a single day, one course, one branch, or a single payment status."
+          description="Filter date-based metrics and narrow student, payment, branch, and transaction charts using the matching criteria."
           triggerLabel="More filters"
           fields={filterFields}
           values={filters}
           onApply={async (values) => {
+            if (values.from && values.to && values.from > values.to) {
+              throw new Error("The start date must be on or before the end date.");
+            }
+            const wasCustomDateRange = Boolean(filters.from || filters.to);
             setFilters(values);
-            if (!values.from && !values.to) setActiveTab("All Dates");
+            if (!values.from && !values.to && wasCustomDateRange) setActiveTab("This Month");
           }}
           onClear={async (values) => {
             setFilters(values);
-            setActiveTab("All Dates");
+            setActiveTab("This Month");
           }}
         />
       </div>
@@ -755,7 +842,11 @@ export default function AnalyticsPage() {
                 Enrollment Trends
               </CardTitle>
               <CardDescription className="text-xs">
-                {isWeekBucketed(range) ? "Weekly enrollment count" : "Monthly enrollment count"}
+                {bucketUnit(range) === "day"
+                  ? "Daily enrollment count"
+                  : bucketUnit(range) === "week"
+                    ? "Weekly enrollment count"
+                    : "Monthly enrollment count"}
               </CardDescription>
             </div>
             <Badge variant="outline" className="gap-1 text-xs">
@@ -858,7 +949,11 @@ export default function AnalyticsPage() {
               Revenue vs Expenses
             </CardTitle>
             <CardDescription className="text-xs">
-              {isDayBucketed(range) ? "Daily financial overview" : "Monthly financial overview"}
+              {bucketUnit(range) === "day"
+                ? "Daily financial overview"
+                : bucketUnit(range) === "week"
+                  ? "Weekly financial overview"
+                  : "Monthly financial overview"}
             </CardDescription>
           </CardHeader>
           <CardContent>

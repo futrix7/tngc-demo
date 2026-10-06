@@ -263,7 +263,7 @@ export default function AdminDashboardPage() {
       <div className="space-y-1">
         <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
         <p className="text-xs text-muted-foreground">
-          Welcome back, Admin — here is how today is going ({new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric" })})
+          Welcome back, Admin — here is how today is going ({new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "Asia/Kolkata" })})
         </p>
       </div>
 
@@ -356,7 +356,7 @@ export default function AdminDashboardPage() {
               <ResponsiveContainer width="100%" height={240}>
                 <BarChart data={dailyCollections}>
                   <CartesianGrid {...gridStyle} />
-                  <XAxis dataKey="day" tick={axisStyle} />
+                  <XAxis dataKey="label" tick={axisStyle} />
                   <YAxis tick={axisStyle} />
                   <Tooltip
                     contentStyle={tooltipStyle}
